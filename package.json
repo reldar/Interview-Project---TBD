@@ -1,0 +1,24 @@
+{
+  "name": "latihkerja",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start",
+    "test": "node --test tests/*.test.mjs",
+    "test:upload": "node scripts/check-upload.mjs",
+    "test:day1": "node scripts/check-day1-browser-boundary.cjs",
+    "test:layouts": "node scripts/check-ten-layouts.mjs"
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "next": "^16.4.6",
+    "pdf-parse": "^2.4.5",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwind-merge": "^3.7.1",
+    "tailwindcss": "^3.4.19"
+  }
+}
