@@ -365,9 +365,40 @@ test('labeled names preserve distinct answer evidence and older records can repl
   assert.equal((await answer(1, 'Name: Alex. I skipped testing.')).status, 409);
 
   const saved = await store.getSession(sessionId);
-  const answers = [{ ...saved.interview.answers[0], userAnswer: original }];
+  const answers = [{ questionNumber: 1, feedback: saved.interview.answers[0].feedback, userAnswer: original }];
   await store.updateSession(sessionId, saved.version, { interview: { ...saved.interview, answers } });
   const replay = await answer(1, original, { generateStructuredResponse() { assert.fail('replay called provider'); } });
   assert.equal(replay.status, 200);
   assert.deepEqual(await replay.json(), await accepted.json());
+});
+
+test('answer replay is bound to the submission and preserves English and Indonesian evidence', async () => {
+  for (const [language, name, lead] of [['en', 'Name', 'During my internship'], ['id', 'Nama', 'Saat magang']]) {
+    const { store, sessionId, answer } = await setup({ language });
+    const original = `${name}: Nadia Kartika. ${lead}, I built a Python dashboard.`;
+    const different = `${name}: Nadia Kartika. ${lead}, I reviewed payroll records.`;
+    const failure = { generateStructuredResponse() { assert.fail('a replay or conflict must skip scoring'); } };
+    const accepted = await answer(1, original, {
+      async generateStructuredResponse({ userPrompt }) {
+        assert.match(userPrompt, /built a Python dashboard/);
+        assert.doesNotMatch(userPrompt, /Nadia Kartika/);
+        return JSON.stringify(feedback);
+      },
+    });
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(await (await answer(1, ` ${original} `, failure)).json(), await accepted.json());
+    const conflict = await answer(1, different, failure);
+    assert.equal(conflict.status, 409);
+    assert.equal((await conflict.json()).error.currentQuestion.questionNumber, 2);
+    const changedMaskedValue = original.replace('Nadia Kartika', 'Fictional Person');
+    assert.equal((await answer(1, changedMaskedValue, failure)).status, 409);
+    assert.equal((await answer(2, `${name}: Nadia Kartika`, failure)).status, 400);
+    const { interview, version } = await store.getSession(sessionId);
+    assert.match(interview.answers[0].answerReplayHash, /^[a-f0-9]{64}$/);
+    assert.doesNotMatch(JSON.stringify(interview), /Nadia Kartika/);
+
+    const ambiguous = { questionNumber: 1, userAnswer: `${name}: [IDENTITY_REDACTED]`, feedback };
+    assert.equal((await store.updateSession(sessionId, version, { interview: { ...interview, answers: [ambiguous] } })).ok, true);
+    assert.equal((await answer(1, original, failure)).status, 409);
+  }
 });

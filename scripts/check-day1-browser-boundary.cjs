@@ -90,10 +90,9 @@ function buildExactSizePdf(size) {
       // A. Above boundary (5,000,001 B): must show client-side size error and fire 0 requests.
       await page.locator('#pdf').setInputFiles(files[MAX_PDF_BYTES + 1]);
       const errText = await page.locator('#pdf-error').textContent();
-      assert.ok(
-        errText && (en ? errText.includes('5 MB') : errText.includes('5 MB')),
-        `Expected localized 5 MB error in ${lang}, got: ${errText}`
-      );
+      assert.equal(errText?.trim(), en
+        ? 'This PDF exceeds the 5 MB limit. Choose a smaller PDF file.'
+        : 'Ukuran PDF melebihi batas 5 MB. Pilih berkas PDF yang lebih kecil.');
       assert.equal(networkCalls.length, 0, 'Oversize file must be rejected before network upload');
       console.log('browser-oversize-pass', lang, MAX_PDF_BYTES + 1, errText.trim());
 
@@ -122,6 +121,47 @@ function buildExactSizePdf(size) {
       await page.close();
     }
 
+    if (process.argv.includes('--interview-replay')) {
+      const page = await browser.newPage();
+      try {
+        await page.goto(baseUrl);
+        await page.getByRole('button', { name: 'EN', exact: true }).click();
+        await page.locator('#pdf').setInputFiles(files[MAX_PDF_BYTES]);
+        await page.locator('#jd').fill('Data intern requiring Python, Excel, and SQL.');
+        await page.getByRole('button', { name: 'Analyze CV Now' }).click();
+        const panel = page.locator('.interviewBridge');
+        await panel.getByRole('button', { name: 'Set up interview', exact: true }).click();
+        await panel.getByRole('button', { name: 'Start interview', exact: true }).click();
+
+        const answer = 'Name: Nadia Kartika. During my internship, I built a Python dashboard.';
+        const submit = panel.getByRole('button', { name: 'Submit answer', exact: true });
+        await panel.locator('#interview-answer').fill(answer);
+        let committed;
+        let sent;
+        await page.route('**/api/interview/answer', async (route) => {
+          sent = route.request().postDataJSON();
+          const response = await route.fetch();
+          assert.equal(response.status(), 200);
+          committed = await response.json();
+          await route.abort('connectionreset');
+        }, { times: 1 });
+        await submit.click();
+        const retry = panel.getByRole('button', { name: 'Retry', exact: true });
+        await retry.waitFor();
+        assert.equal(await panel.locator('#interview-answer').inputValue(), answer);
+        const replay = page.waitForResponse((res) => res.url().endsWith('/api/interview/answer') && res.status() === 200);
+        await retry.click();
+        assert.deepEqual(await (await replay).json(), committed);
+        const other = await page.request.post(new URL('/api/interview/answer', baseUrl).href, { data: {
+          ...sent, userAnswer: answer.replace('built a Python dashboard', 'reviewed payroll records'),
+        } });
+        assert.equal(other.status(), 409);
+        assert.equal((await other.json()).error.currentQuestion.questionNumber, 2);
+        console.log('browser-real-interview-replay-pass');
+      } finally {
+        await page.close();
+      }
+    }
     console.log('DAY1_BROWSER_BOUNDARY_ALL_PASSED');
   } finally {
     await browser.close();

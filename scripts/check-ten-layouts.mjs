@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { handleAnalyzeCv } from '../app/api/analyze-cv/route.js';
 import { createGeminiProvider } from '../lib/ats.js';
-import { ERROR_CODES, buildCvReportText, getErrorCopy } from '../lib/contracts.js';
+import { ERROR_CODES, buildCvReportText, getErrorCopy, normalizeKeyword } from '../lib/contracts.js';
 import { createMemoryStore } from '../lib/store.js';
 import { generateFixtures } from './generate-layout-pdfs.mjs';
 
@@ -99,6 +99,19 @@ const HARNESS_ENV = Object.freeze({
   VERCEL_ENV: 'production',
   QUOTA_HMAC_SECRET: 'local-ten-layout-check-secret-32chars',
 });
+
+const EXPECTED_MISSING = {
+  '01-single-column': 'Tableau', '02-two-column': 'Apache Airflow', '03-sidebar': 'Power BI',
+  '04-table-based': 'Playwright', '05-header-footer-heavy': 'TypeScript', '06-multi-page': 'Looker Studio',
+  '07-education-first': 'Git', '08-project-heavy': 'REST APIs', '09-indonesian': 'Power BI', '10-mixed-id-en': 'Looker',
+  'sparse-two-bullets': 'SQL', 'sparse-zero-bullets': 'SQL',
+};
+
+function hasKeywords(values, expected, exact) {
+  if (!Array.isArray(values)) return false;
+  const canonical = new Set(values.map(normalizeKeyword));
+  return (!exact || canonical.size === expected.length) && expected.every((word) => canonical.has(normalizeKeyword(word)));
+}
 
 const STUB_MISSING_CANDIDATES = [
   'Apache Airflow',
@@ -206,33 +219,26 @@ function makeUploadRequest(bytes, filename, jobDescription, language, ip) {
 }
 
 async function runValidSpec({ spec, pdfBytes, ip, offline, store }) {
-  let capturedPrompt = null;
+  let sentCv = '';
+  let sentJd = '';
   const attempts = [];
-  const underlying = offline
-    ? createOfflineStubProvider(spec)
-    : createGeminiProvider({
-        fetchImpl: async (url, init) => {
-          const model = url.match(/models\/([^:]+)/)?.[1] || 'unknown';
-          const t0 = performance.now();
-          try {
-            const res = await fetch(url, init);
-            attempts.push(`${model}:${res.status}(${Math.round(performance.now() - t0)}ms)`);
-            return res;
-          } catch (err) {
-            attempts.push(`${model}:${err.name || 'ERR'}(${Math.round(performance.now() - t0)}ms)`);
-            throw err;
-          }
-        },
-      });
-
-  const observingProvider = {
-    async generateAtsAnalysis(args) {
-      capturedPrompt = args;
-      if (typeof underlying === 'function') {
-        return underlying(args);
-      }
-      return underlying.generateAtsAnalysis(args);
-    },
+  const stub = offline ? createOfflineStubProvider(spec) : null;
+  const capture = (prompt, tag) => prompt.split(`<${tag}>\n`)[1]?.split(`\n</${tag}>`)[0] ?? '';
+  const fetchImpl = async (url, init) => {
+    const prompt = JSON.parse(init.body).contents[0].parts[0].text;
+    sentCv = capture(prompt, 'cv_data');
+    sentJd = capture(prompt, 'job_description_data');
+    if (stub) return Response.json({ candidates: [{ content: { parts: [{ text: await stub() }] } }] });
+    const model = url.match(/models\/([^:]+)/)?.[1] || 'unknown';
+    const t0 = performance.now();
+    try {
+      const response = await fetch(url, init);
+      attempts.push(`${model}:${response.status}(${Math.round(performance.now() - t0)}ms)`);
+      return response;
+    } catch (err) {
+      attempts.push(`${model}:${err.name || 'ERR'}(${Math.round(performance.now() - t0)}ms)`);
+      throw err;
+    }
   };
 
   const req = makeUploadRequest(
@@ -246,15 +252,14 @@ async function runValidSpec({ spec, pdfBytes, ip, offline, store }) {
   const t0 = performance.now();
   const res = await handleAnalyzeCv(req, {
     store,
-    provider: observingProvider,
-    env: HARNESS_ENV,
+    geminiOptions: offline ? { apiKey: 'local-layout-fixture', models: ['stub'], fetchImpl } : { fetchImpl },
+    env: offline ? { ...HARNESS_ENV, AI_UPSTREAM_REQUESTS_PER_MINUTE: '20' }
+      : { ...process.env, ...HARNESS_ENV },
     logger: () => {},
   });
   const latencyMs = Math.round(performance.now() - t0);
   const body = await res.json();
 
-  const sentCv = capturedPrompt?.sanitizedCvText || '';
-  const sentJd = capturedPrompt?.sanitizedJd || '';
   const orderCheck = checkExtractionOrder(sentCv, spec.expectedBullets);
   const missedSkills = spec.expectedSkills.filter((skill) => !sentCv.includes(skill));
   const missedLandmarks = spec.survivingLandmarks.filter((lm) => !sentCv.includes(lm));
@@ -271,6 +276,8 @@ async function runValidSpec({ spec, pdfBytes, ip, offline, store }) {
   const isSparseTwo = spec.id === 'sparse-two-bullets';
   const isSparseZero = spec.id === 'sparse-zero-bullets';
   const rewriteCount = Array.isArray(body?.rewrites) ? body.rewrites.length : -1;
+  const keywordCheck = hasKeywords(body?.matchedKeywords, spec.expectedSkills, offline)
+    && hasKeywords(body?.missingKeywords, [EXPECTED_MISSING[spec.id]], offline);
 
   let rewriteCheckOk = false;
   if (res.status === 200) {
@@ -295,6 +302,7 @@ async function runValidSpec({ spec, pdfBytes, ip, offline, store }) {
     missedLandmarks.length === 0 &&
     leakedPii.length === 0 &&
     !sessionLeaked &&
+    keywordCheck &&
     Number.isInteger(body?.atsScore) &&
     body.atsScore >= 0 &&
     body.atsScore <= 100 &&
@@ -308,6 +316,7 @@ async function runValidSpec({ spec, pdfBytes, ip, offline, store }) {
   if (missedLandmarks.length) notes.push(`missedLandmarks=[${missedLandmarks.join(',')}]`);
   if (leakedPii.length) notes.push(`leakedPii=[${leakedPii.join(',')}]`);
   if (sessionLeaked) notes.push('sessionId in export');
+  if (res.status === 200 && !keywordCheck) notes.push('matched/missing keywords differ from independent expectations');
   if (res.status === 200 && !rewriteCheckOk) notes.push(`unexpected rewriteCount=${rewriteCount}`);
   if (res.status === 200 && !stubParaphrasedOk) notes.push('verbatim stub rewrite');
 
@@ -345,7 +354,7 @@ async function runInvalidSpec({ spec, pdfBytes, ip, store }) {
   const t0 = performance.now();
   const res = await handleAnalyzeCv(req, {
     store,
-    env: HARNESS_ENV,
+    env: { ...HARNESS_ENV, AI_UPSTREAM_REQUESTS_PER_MINUTE: '20' },
     provider: async () => {
       providerCalls += 1;
       return '{}';
@@ -361,8 +370,8 @@ async function runInvalidSpec({ spec, pdfBytes, ip, store }) {
     res.status === 422 &&
     code === spec.expectedCode &&
     providerCalls === 0 &&
-    Boolean(copyEn) &&
-    Boolean(copyId);
+    /read|text/i.test(copyEn) &&
+    /teks|dibaca/i.test(copyId) && copyEn !== copyId;
 
   return {
     id: spec.id,

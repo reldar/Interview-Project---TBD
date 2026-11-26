@@ -20,10 +20,10 @@ function controlledStore(start = '2026-11-25T08:00:00Z') {
   return { store: createMemoryStore({ now: () => now }), advance: (ms) => { now += ms; } };
 }
 
-function upload(requestId) {
+function upload(requestId, variant = 'synthetic fixture', language = 'en') {
   const form = new FormData();
-  form.set('file', new Blob(['%PDF-1.4 synthetic fixture'], { type: 'application/pdf' }), 'cv.pdf');
-  form.set('language', 'en');
+  form.set('file', new Blob([`%PDF-1.4 ${variant}`], { type: 'application/pdf' }), 'cv.pdf');
+  form.set('language', language);
   form.set('jobDescription', fixture.jobDescription);
   form.set('requestId', requestId);
   return new Request('http://localhost/api/analyze-cv', { method: 'POST', body: form });
@@ -177,3 +177,53 @@ test('per-worker intake throttling stops repeated denials before the Redis trans
   assert.equal(commands, MAX_CV_REQUESTS_PER_IP_MINUTE);
   assert.equal(statuses.filter(({ status }) => status === 'throttled').length, 10);
 });
+
+for (const cap of ['analyze', 'aiBudget']) {
+  test(`equivalent CV retries recover after the final ${cap} slot without dispatch or a success charge`, async () => {
+    const { store, advance } = controlledStore();
+    if (cap === 'analyze') {
+      for (let i = 0; i < 4; i += 1) {
+        const { reservationId } = await store.reserveQuota(quota);
+        await store.commitQuota({ ...quota, reservationId });
+      }
+    }
+    let parses = 0;
+    let calls = 0;
+    const deps = {
+      store, env: { ...env, AI_UPSTREAM_REQUESTS_PER_MINUTE: cap === 'analyze' ? '10' : '1' }, logger: silent,
+      extractPdfText: async (bytes) => {
+        parses += 1;
+        const different = Buffer.from(bytes).toString().endsWith('changed content');
+        return { ...extracted, text: different ? `Different CV\n${extracted.text}` : extracted.text };
+      },
+      geminiOptions: fakeGemini(() => { calls += 1; }),
+    };
+    const initial = await handleAnalyzeCv(upload('logical'), deps);
+    assert.equal(initial.status, 200);
+    const committed = await initial.json();
+    const equivalent = await Promise.all(['different PDF bytes', 'another PDF'].map((variant) =>
+      handleAnalyzeCv(upload('logical', variant), deps)));
+    for (const response of equivalent) {
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), committed);
+    }
+    const different = await handleAnalyzeCv(upload('logical', 'changed content'), deps);
+    assert.equal(different.status, 429);
+    assert.equal((await different.json()).error.action, cap);
+    const unrelated = await handleAnalyzeCv(upload('unrelated'), deps);
+    assert.equal(unrelated.status, 429);
+    assert.equal((await unrelated.json()).error.action, cap);
+    assert.equal((await handleAnalyzeCv(upload('logical', 'valid', 'id'), deps)).status, 429);
+    assert.equal(parses, 4, 'Only the original and the bounded logical candidates reached the parser');
+    assert.equal(calls, 1);
+    const check = await store.reserveQuota(quota);
+    assert.equal(check.count, cap === 'analyze' ? 5 : 2);
+    if (check.allowed) await store.releaseQuota(check);
+    advance(15 * 60_000);
+    if (cap === 'analyze') {
+      const expired = await handleAnalyzeCv(upload('logical', 'different PDF bytes'), deps);
+      assert.equal(expired.status, 429);
+      assert.equal(parses, 4);
+    }
+  });
+}

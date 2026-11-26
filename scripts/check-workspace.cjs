@@ -2,6 +2,7 @@
 // Optionally pass a PDF path as argv[2] to use it instead of the synthetic file.
 const { chromium } = require(process.env.PLAYWRIGHT_CORE || 'playwright-core');
 const assert = require('node:assert/strict');
+const { once } = require('node:events');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
@@ -173,9 +174,21 @@ async function assertLiveRegion(client, selector, role, priority) {
 
       // Upload valid PDF + blank JD -> JD field-specific error + focus on #jd.
       await tabTo(page, picker);
-      const fileChooser = page.waitForEvent('filechooser');
-      await page.keyboard.press('Enter');
-      await (await fileChooser).setFiles(pdf);
+      // Enable interception before sending the key so Chrome cannot open a native dialog first.
+      await accessibility.send('Page.enable');
+      await accessibility.send('Page.setInterceptFileChooserDialog', { enabled: true });
+      try {
+        const [[chooser]] = await Promise.all([
+          once(accessibility, 'Page.fileChooserOpened', { signal: AbortSignal.timeout(5000) }),
+          page.keyboard.press('Enter'),
+        ]);
+        const { node } = await accessibility.send('DOM.describeNode', { backendNodeId: chooser.backendNodeId });
+        assert.equal(node.localName, 'input');
+        assert.ok(node.attributes.some((attribute, index) => attribute === 'id' && node.attributes[index + 1] === 'pdf'));
+      } finally {
+        await accessibility.send('Page.setInterceptFileChooserDialog', { enabled: false });
+      }
+      await picker.setInputFiles(pdf);
       await tabTo(page, analyze);
       await page.keyboard.press('Enter');
       await page.locator('#jd-error').waitFor();
@@ -530,9 +543,13 @@ async function assertLiveRegion(client, selector, role, priority) {
       assert.equal(await reportHeading.evaluate((node) => node === document.activeElement), true);
       const report = panel.locator('.interviewReport');
       assert.equal(await report.locator('details').count(), 5);
-      const summary = buildInterviewSummary(committed, language);
-      const average = summary.averageScores.clarity.toFixed(1).replace('.', en ? '.' : ',');
-      await report.getByText(`${en ? 'Clarity' : 'Kejelasan'} ${average}/5`, { exact: true }).waitFor();
+      // The 375px fixture assigns Q2 (3, 4, 2); all other Q1–Q4 scores are (4, 5, 3).
+      // Q5 is (5, 5, 2). Use independent expected averages for all three dimensions.
+      const expected = width === 375 ? ['4,0', '4,8', '2,6'] : en ? ['4.2', '5.0', '2.8'] : ['4,2', '5,0', '2,8'];
+      const labels = en ? ['Clarity', 'Relevance', 'Impact'] : ['Kejelasan', 'Relevansi', 'Dampak'];
+      for (const [index, label] of labels.entries()) {
+        await report.getByText(`${label} ${expected[index]}/5`, { exact: true }).waitFor();
+      }
       for (const [index, record] of committed.entries()) {
         const item = report.locator('details').nth(index);
         assert.match(await item.locator('summary').innerText(), new RegExp(` ${record.questionNumber}\\.`));

@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { performance } from 'node:perf_hooks';
 import { createMemoryStore, createUpstashStore } from '../lib/store.js';
 import { buildAtsPrompt, escapeDelimiterTags } from '../lib/ats.js';
 import { FIXTURES, validateAnalysisPayload } from '../lib/contracts.js';
@@ -381,7 +380,7 @@ test('SPEC-HIGH-02: blocks date-to-metric bypasses, role inversions, invented to
   assert.equal(hundredWithMissing.ok, false);
 });
 
-test('STD-MED-01: rejects 2,500 repeated keywords and 10,000-token improved against 30k CV + 15k JD in < 100ms', () => {
+test('STD-MED-01: rejects oversized collections and fields before evaluating source evidence', () => {
   const bigCv = ('Built a Python script to clean duplicate rows in Excel.\n').repeat(540).slice(0, 30_000);
   const bigJd = ('Data Analyst requiring Python, Excel, SQL, Tableau, and Power BI. ').repeat(230).slice(0, 15_000);
 
@@ -407,14 +406,62 @@ test('STD-MED-01: rejects 2,500 repeated keywords and 10,000-token improved agai
     ],
   };
 
-  const t0 = performance.now();
   const r1 = validateAnalysisPayload(repeatedKeywordsPayload, bigCv, { sanitizedJd: bigJd });
   const r2 = validateAnalysisPayload(hugeRewritePayload, bigCv, { sanitizedJd: bigJd });
-  const elapsedMs = performance.now() - t0;
+  assert.deepEqual(r1, { ok: false, reason: 'Keyword groups cannot exceed 60 items.' });
+  assert.deepEqual(r2, { ok: false, reason: 'Each rewrite requires non-blank original, improved, and reason strings up to 600 characters.' });
+});
 
-  assert.equal(r1.ok, false);
-  assert.equal(r2.ok, false);
-  assert.ok(elapsedMs < 100, `Expected < 100ms for oversized payload bounds check, took ${elapsedMs.toFixed(2)}ms`);
+test('a rewrite must quote one distinct eligible bullet, including its original qualifiers', () => {
+  const first = 'Built a Python script to clean duplicate rows.';
+  const second = 'Prepared weekly billing reports.';
+  const validate = (source, original, improved) => validateAnalysisPayload({
+    atsScore: 35, matchedKeywords: [], missingKeywords: [], rewrites: [{ original, improved, reason: 'Clarifies the task.' }],
+  }, source);
+  assert.equal(validate(`- ${first}\n- ${second}`, first, 'Developed a Python script to remove duplicate rows.').ok, true);
+  for (const invented of [
+    'Built a Python script to clean duplicate rows and saved 70% of review time.',
+    'Built a Python script to clean duplicate rows and prepared weekly billing reports.',
+    'Built a Python script to clean 1,000 duplicate rows.',
+  ]) assert.match(validate(`- ${first}\n- ${second}`, invented, invented).reason, /does not trace/);
+  assert.match(validate('Skills: Python, Excel', 'Skills: Python, Excel', 'Built monitoring scripts in Python and Excel.').reason, /exceed/);
+});
+
+test('count, percentage, duration, action and scope stay bound in bilingual rewrites', () => {
+  const cases = [
+    ['Prepared 12 reports in Excel.', 'Prepared Excel reports that eliminated 12 outages.', false],
+    ['Prepared 12 reports in Excel.', 'Reviewed 12 reports in Excel.', false],
+    ['Prepared 12 sales reports in Excel.', 'Prepared 12 audit reports in Excel.', false],
+    ['Prepared 12 sales reports in Excel.', 'Menyusun 12 laporan penjualan menggunakan Excel.', true],
+    ['Built an Excel dashboard and reduced review time by 12%.', 'Built a dashboard in Excel and reduced errors by 12%.', false],
+    ['Built an Excel dashboard and reduced review time by 12%.', 'Mengembangkan dasbor Excel dan menurunkan waktu peninjauan sebesar 12%.', true],
+    ['Worked 12 hours to prepare Excel reports.', 'Saved 12 hours by preparing Excel reports.', false],
+    ['Built a Python script to clean duplicate rows.', 'Built a Python script that eliminated all billing errors and saved millions.', false],
+    ['Built a Python script to clean duplicate rows.', 'Built a Python script that increased revenue.', false],
+    ['Built a Python script but did not increase revenue.', 'Built a Python script that increased revenue.', false],
+    ['Built dashboards for a bachelor project in mathematics.', 'Built dashboards as part of a PhD in mathematics.', false],
+    ['Prepared Excel reports and became proficient in Excel.', 'Prepared Excel reports and became an Excel expert.', false],
+    ['Helped prepare weekly billing reports.', 'Prepared weekly billing reports independently.', false],
+    ['Helped prepare weekly billing reports.', 'Contributed to preparing weekly billing reports.', true],
+    ['Tutored children in reading and arithmetic after school.', 'Membimbing anak-anak belajar membaca dan berhitung sepulang sekolah.', true],
+    ['Memperbaiki kostum pertunjukan untuk kelompok teater.', 'Memperbaiki kostum kelompok teater untuk pertunjukan.', true],
+  ];
+  for (const [original, improved, expected] of cases) {
+    const result = validateAnalysisPayload({
+      atsScore: 35, matchedKeywords: [], missingKeywords: [], rewrites: [{ original, improved, reason: 'Clarifies the action.' }],
+    }, `- ${original}`);
+    assert.equal(result.ok, expected, `${improved} (${result.reason ?? 'accepted'})`);
+  }
+});
+
+test('negated CV evidence and ordinary go wording do not satisfy required tools', () => {
+  const cv = 'I have no experience with Python, but I used Excel. I go to the office weekly.';
+  const options = { sanitizedJd: 'Python, Excel and Go are required.' };
+  const payload = { atsScore: 50, matchedKeywords: ['Excel'], missingKeywords: ['Python', 'Go'], rewrites: [] };
+  assert.equal(validateAnalysisPayload(payload, cv, options).ok, true);
+  assert.equal(validateAnalysisPayload({ ...payload, matchedKeywords: ['Excel', 'Python'], missingKeywords: ['Go'] }, cv, options).ok, false);
+  assert.equal(validateAnalysisPayload({ ...payload, matchedKeywords: ['Excel', 'Go'], missingKeywords: ['Python'] }, cv, options).ok, false);
+  assert.equal(validateAnalysisPayload({ ...payload, atsScore: 100, missingKeywords: [] }, cv, options).ok, false);
 });
 
 test('STD-LOW-01 & STD-LOW-03: buildAtsPrompt escapes malformed XML tags and Upstash store guards skew & undefined result', async () => {

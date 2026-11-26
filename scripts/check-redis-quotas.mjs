@@ -1,11 +1,15 @@
 // Opt-in integration verification. Starts and removes its own non-networked Redis.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 import { handleAnalyzeCv } from '../app/api/analyze-cv/route.js';
+import { handleInterviewAnswer } from '../app/api/interview/answer/route.js';
 import { FIXTURES } from '../lib/contracts.js';
+import { INTERVIEW_FIXTURES } from '../lib/interview-fixtures.js';
 import { createUpstashStore, deriveIpHash, getJakartaDayWindow } from '../lib/store.js';
 
 const exec = promisify(execFile);
@@ -61,7 +65,10 @@ if (!isMainThread) {
           method: 'POST', headers, body,
         }), {
           store, env, logger: () => {},
-          extractPdfText: async () => ({ text: fixture.cvText, pages: 1, bytes: pdfVariant.length }),
+          extractPdfText: async () => ({
+            text: pdfVariant === 'changed evidence' ? `Different CV\n${fixture.cvText}` : fixture.cvText,
+            pages: 1, bytes: pdfVariant.length,
+          }),
           geminiOptions: {
             apiKey: 'local-test-only', models: ['stub-primary', 'stub-fallback'],
             fetchImpl: async () => {
@@ -76,6 +83,21 @@ if (!isMainThread) {
               return Response.json({
                 candidates: [{ content: { parts: [{ text: JSON.stringify(fixture.response) }] } }],
               });
+            },
+          },
+        });
+        result = { status: response.status, body: await response.json(), calls };
+      } else if (method === 'answer') {
+        const [body, ip, env] = args;
+        let calls = 0;
+        const response = await handleInterviewAnswer(new Request('http://localhost/api/interview/answer', {
+          method: 'POST', headers: { 'content-type': 'application/json', 'x-vercel-forwarded-for': ip }, body,
+        }), {
+          store, env, logger: () => {}, geminiOptions: {
+            apiKey: 'local-test-only', models: ['stub'], fetchImpl: async () => {
+              calls += 1;
+              const feedback = { clarityScore: 4, relevanceScore: 5, impactScore: 3, suggestion: 'Explain the result.' };
+              return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(feedback) }] } }] });
             },
           },
         });
@@ -245,6 +267,100 @@ if (!isMainThread) {
     assert.equal(Number(await redis('GET', quotaKeys[0])), 1);
     assert.equal((await store.getSession(winner.body.sessionId)).sessionId, winner.body.sessionId);
     console.log('Equivalent PDFs across workers generated one result and replayed the same session.');
+
+    const lastQuota = { action: 'analyze', ipHash: deriveIpHash('192.0.2.70', undefined, canonicalEnv) };
+    for (let i = 0; i < 4; i += 1) {
+      const next = await run(i, 'reserveQuota', lastQuota);
+      assert.ok(next.allowed);
+      await run(i, 'commitQuota', { ...lastQuota, reservationId: next.reservationId });
+    }
+    const quotaPdf = (worker, bytes) => run(worker, 'analyze', 'final-success-pdf', '192.0.2.70', canonicalEnv, bytes);
+    const finalSuccess = await quotaPdf(0, 'variant A');
+    assert.equal(finalSuccess.status, 200);
+    assert.equal(finalSuccess.calls, 1);
+    const quotaReplays = await Promise.all([quotaPdf(1, 'variant C'), quotaPdf(2, 'variant D')]);
+    for (const replay of quotaReplays) assert.deepEqual(replay, { status: 200, body: finalSuccess.body, calls: 0 });
+    const changedQuota = await quotaPdf(3, 'changed evidence');
+    assert.equal(changedQuota.status, 429);
+    assert.equal(changedQuota.body.error.action, 'analyze');
+    assert.equal(changedQuota.calls, 0);
+    const [lastQuotaKey] = await redis('KEYS', `quota:analyze:*:${lastQuota.ipHash}`);
+    assert.equal(Number(await redis('GET', lastQuotaKey)), 5);
+
+    for (const key of await redis('KEYS', 'ai:budget:*')) await redis('PEXPIREAT', key, expired);
+    const budgetEnv = { ...env, AI_UPSTREAM_REQUESTS_PER_MINUTE: '1', AI_UPSTREAM_REQUESTS_PER_DAY: '1' };
+    const budgetPdf = (worker, bytes, ip = '192.0.2.72') => run(worker, 'analyze', 'budget-pdf', ip, budgetEnv, bytes);
+    const finalBudget = await budgetPdf(0, 'variant A');
+    assert.equal(finalBudget.status, 200);
+    assert.equal(finalBudget.calls, 1);
+    const budgetResults = await Promise.all([budgetPdf(1, 'variant B'), budgetPdf(2, 'variant C'), budgetPdf(3, 'variant B', '192.0.2.73')]);
+    for (const replay of budgetResults.slice(0, 2)) assert.deepEqual(replay, { status: 200, body: finalBudget.body, calls: 0 });
+    assert.equal(budgetResults[2].status, 429);
+    assert.equal(budgetResults[2].body.error.action, 'aiBudget');
+    assert.equal(budgetResults[2].calls, 0);
+    const changedBudget = await budgetPdf(3, 'changed evidence');
+    assert.equal(changedBudget.status, 429);
+    assert.equal(changedBudget.body.error.action, 'aiBudget');
+    assert.equal(changedBudget.calls, 0);
+    for (const key of await redis('KEYS', 'ai:budget:*')) assert.equal(Number(await redis('GET', key)), 1);
+    console.log('Equivalent retries survived the last success and dispatch slots across workers. Changed inputs and other clients stayed denied.');
+
+    const interview = { mode: 'hrd', language: 'en', currentQuestion: 1, questions: INTERVIEW_FIXTURES.hrd.en.questions };
+    const firstSession = await store.createSession({ interview });
+    const otherSession = await store.createSession({ interview });
+    let nextWorker = 0;
+    let lost;
+    const server = createServer(async (request, response) => {
+      const worker = nextWorker++;
+      try {
+        const chunks = [];
+        for await (const chunk of request) chunks.push(chunk);
+        const result = await run(worker, 'answer', Buffer.concat(chunks).toString('utf8'), '192.0.2.74', canonicalEnv);
+        if (request.headers['x-test-disconnect'] === 'after-commit') {
+          lost = result;
+          response.destroy();
+          return;
+        }
+        response.writeHead(result.status, { 'content-type': 'application/json', 'x-test-dispatches': result.calls });
+        response.end(JSON.stringify(result.body));
+      } catch (error) {
+        response.writeHead(500);
+        response.end(error.message);
+      }
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    try {
+      const send = (sessionId, userAnswer, disconnect = false) => fetch(`http://127.0.0.1:${server.address().port}`, {
+        method: 'POST', headers: { 'content-type': 'application/json', ...(disconnect ? { 'x-test-disconnect': 'after-commit' } : {}) },
+        body: JSON.stringify({ sessionId, questionNumber: 1, userAnswer }),
+      });
+      const answer = 'Name: Nadia Kartika. During my internship, I built a Python dashboard.';
+      const other = 'Name: Nadia Kartika. During my internship, I reviewed payroll records.';
+      const [reset, independent] = await Promise.allSettled([send(firstSession.sessionId, answer, true), send(otherSession.sessionId, other)]);
+      assert.equal(reset.status, 'rejected');
+      assert.equal(lost.status, 200);
+      assert.equal(lost.calls, 1);
+      assert.equal(independent.value.status, 200);
+      assert.equal(independent.value.headers.get('x-test-dispatches'), '1');
+      const [replay, conflict] = await Promise.all([send(firstSession.sessionId, answer), send(firstSession.sessionId, other)]);
+      assert.equal(replay.status, 200);
+      assert.deepEqual(await replay.json(), lost.body);
+      assert.equal(conflict.status, 409);
+      assert.equal((await conflict.json()).error.currentQuestion.questionNumber, 2);
+      assert.equal(replay.headers.get('x-test-dispatches'), '0');
+      assert.equal(conflict.headers.get('x-test-dispatches'), '0');
+      const record = (await store.getSession(firstSession.sessionId)).interview.answers[0];
+      assert.match(record.userAnswer, /built a Python dashboard/);
+      assert.doesNotMatch(record.userAnswer, /Nadia Kartika|payroll/);
+      assert.match((await store.getSession(otherSession.sessionId)).interview.answers[0].userAnswer, /reviewed payroll/);
+      assert.equal((await store.getSession(firstSession.sessionId)).expiresAt, firstSession.expiresAt);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+    console.log('Real HTTP disconnect after Redis commit recovered across workers without a second dispatch; a separate simultaneous session stayed isolated.');
+
     const after = getJakartaDayWindow(Date.parse('2026-11-25T17:00:00.000Z'));
     assert.equal(before.resetAtMs, Date.parse('2026-11-25T17:00:00.000Z'));
     assert.notEqual(before.dateKey, after.dateKey);

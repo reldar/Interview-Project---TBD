@@ -7,9 +7,9 @@
     "build": "next build --webpack",
     "start": "next start",
     "test": "node --experimental-default-type=module --test",
-    "test:upload": "node scripts/check-upload.mjs",
+    "test:upload": "node --experimental-default-type=module scripts/check-upload.mjs",
     "test:day1": "node scripts/check-day1-browser-boundary.cjs",
-    "test:layouts": "node scripts/check-ten-layouts.mjs"
+    "test:layouts": "node --experimental-default-type=module scripts/check-ten-layouts.mjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from 'node:crypto';
 import {
   AppError,
   ERROR_CODES,
@@ -8,13 +9,14 @@ import {
 import { generateInterviewFeedback, getCompletedInterviewReport, withInterviewGeneration } from '../../../../lib/interview.js';
 import { buildInterviewSummary, isInterviewSummary } from '../../../../lib/interview-report.js';
 import { logRouteEvent } from '../../../../lib/logger.js';
-import { redactPii } from '../../../../lib/redact.js';
+import { REDACTION_PLACEHOLDERS, redactPii } from '../../../../lib/redact.js';
 import { deriveIpHash, getStore } from '../../../../lib/store.js';
 import { readBoundedJson } from '../../../../lib/request-body.js';
 import { budgetedGeminiProvider, getAiBudgetLimits, requireAiBudget } from '../../../../lib/ai-budget.js';
 
 export const runtime = 'nodejs';
 const ROUTE = '/api/interview/answer';
+const localReplaySecret = randomBytes(32);
 
 function questionAt(interview, number) {
   const question = interview.questions[number - 1];
@@ -39,8 +41,18 @@ function answerResult(interview, record) {
   };
 }
 
-function matchesAnswer(record, sanitizedAnswer) {
-  return record && (record.userAnswer === sanitizedAnswer || redactPii(record.userAnswer).trim() === sanitizedAnswer);
+function hasAnswerEvidence(text) {
+  const withoutLabels = text.replace(/^[ \t]*(?:full name|name|nama(?: lengkap)?|email|phone|telepon|alamat|address|linkedin)[ \t]*:[ \t]*(?=\[)/gim, '');
+  const remaining = Object.values(REDACTION_PLACEHOLDERS).reduce((value, placeholder) => value.replaceAll(placeholder, ''), withoutLabels);
+  return /[\p{L}\p{N}]/u.test(remaining);
+}
+
+function matchesAnswer(record, replayHash, sanitizedAnswer) {
+  if (!record) return false;
+  if (record.answerReplayHash !== undefined) return record.answerReplayHash === replayHash;
+  // Legacy records can replay only when the newly masked submission preserves the recorded evidence.
+  const previous = redactPii(record.userAnswer).trim();
+  return hasAnswerEvidence(previous) && previous === sanitizedAnswer;
 }
 
 function conflict(interview) {
@@ -64,8 +76,9 @@ export async function handleInterviewAnswer(request, deps = {}) {
   try {
     const body = await readBoundedJson(request, 32_768);
     const { sessionId, questionNumber, userAnswer } = validateInterviewAnswerRequest(body);
-    const sanitizedAnswer = redactPii(userAnswer).trim();
-    if (!sanitizedAnswer) throw new AppError(ERROR_CODES.INVALID_INPUT, { field: 'userAnswer' });
+    const normalizedAnswer = userAnswer.replace(/\r\n?/g, '\n').normalize('NFC').trim();
+    const sanitizedAnswer = redactPii(normalizedAnswer).trim();
+    if (!hasAnswerEvidence(sanitizedAnswer)) throw new AppError(ERROR_CODES.INVALID_INPUT, { field: 'userAnswer' });
 
     const store = deps.store ?? getStore();
     const session = await store.getSession(sessionId);
@@ -73,10 +86,14 @@ export async function handleInterviewAnswer(request, deps = {}) {
     const { interview } = session;
     if (!interview) throw conflict(null);
     headers['content-language'] = interview.language;
+    const secret = (deps.env ?? process.env).QUOTA_HMAC_SECRET || localReplaySecret;
+    const replayHash = createHmac('sha256', secret)
+      .update(JSON.stringify(['interview-answer-replay-v1', sessionId, questionNumber, normalizedAnswer]))
+      .digest('hex');
 
     const records = interview.answers ?? [];
     const previous = records[questionNumber - 1];
-    if (matchesAnswer(previous, sanitizedAnswer)) {
+    if (matchesAnswer(previous, replayHash, sanitizedAnswer)) {
       return respond(answerResult(interview, previous), 200, 'OK');
     }
     if (interview.completed || interview.currentQuestion !== questionNumber) throw conflict(interview);
@@ -93,7 +110,7 @@ export async function handleInterviewAnswer(request, deps = {}) {
         sanitizedJd: session.sanitizedJd,
         userAnswer: sanitizedAnswer,
       }, deps.provider ?? budgetedGeminiProvider(store, limits, claim, deps.geminiOptions));
-      const record = { questionNumber, userAnswer: sanitizedAnswer, feedback };
+      const record = { questionNumber, userAnswer: sanitizedAnswer, answerReplayHash: replayHash, feedback };
       const completed = questionNumber === INTERVIEW_QUESTION_COUNT;
       const nextInterview = {
         ...interview,
@@ -110,7 +127,7 @@ export async function handleInterviewAnswer(request, deps = {}) {
     if (outcome.response) return respond(outcome.response, 200, 'OK');
     const latest = outcome.session?.interview;
     const winner = latest?.answers?.[questionNumber - 1];
-    if (matchesAnswer(winner, sanitizedAnswer)) {
+    if (matchesAnswer(winner, replayHash, sanitizedAnswer)) {
       return respond(answerResult(latest, winner), 200, 'OK');
     }
     throw conflict(latest);

@@ -21,6 +21,11 @@ export const runtime = 'nodejs';
 
 const MAX_JSON_BODY_BYTES = 512_000;
 const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const CV_QUOTA_ACTIONS = { limited: 'analyze', attempts: 'cvAdmission', budget: 'aiBudget', throttled: 'cvIntake' };
+
+function admissionError({ status, resetAt }) {
+  return new AppError(ERROR_CODES.QUOTA_REACHED, { action: CV_QUOTA_ACTIONS[status], resetAt });
+}
 
 function parseOptionalRequestId(candidate, headerCandidate) {
   const raw =
@@ -58,6 +63,7 @@ export async function handleAnalyzeCv(request, deps = {}) {
   let admission;
   let providerAttempted = false;
   let chargeAdmission = true;
+  let replayOnly = false;
 
   let transport = undefined;
   let language = undefined;
@@ -172,20 +178,16 @@ export async function handleAnalyzeCv(request, deps = {}) {
       fingerprint,
       limits,
       requestId: requestId ? createHash('sha256').update(`${requestId}\0${fingerprint}`).digest('hex') : '',
+      logicalId: requestId ? createHmac('sha256', ipHash).update(JSON.stringify([requestId, language, sanitizedJd])).digest('hex') : '',
     });
     if (intake.status === 'cached') {
       log({ route: '/api/analyze-cv', status: 200, code: 'OK', elapsedMs: now() - startedAt, meta: { transport, language, cached: true } });
       return Response.json(intake.result);
     }
-    const quotaActions = { limited: 'analyze', attempts: 'cvAdmission', budget: 'aiBudget', throttled: 'cvIntake' };
-    if (Object.hasOwn(quotaActions, intake.status)) {
-      throw new AppError(ERROR_CODES.QUOTA_REACHED, {
-        action: quotaActions[intake.status],
-        resetAt: intake.resetAt,
-      });
-    }
+    if (Object.hasOwn(CV_QUOTA_ACTIONS, intake.status)) throw admissionError(intake);
     if (intake.status !== 'claimed') throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
     admission = intake.admission;
+    replayOnly = Boolean(intake.denial);
     if (fileBytes) {
       const extracted = await (deps.extractPdfText ?? extractPdfText)(fileBytes, { maxBytes: MAX_PDF_BYTES });
       fileBytes = null;
@@ -211,6 +213,14 @@ export async function handleAnalyzeCv(request, deps = {}) {
           .update(`${requestId}\0${language}\0${sanitizedCvText}\0${sanitizedJd}`)
           .digest('hex')
       : '';
+    if (intake.denial) {
+      // Admission under exhaustion permits only this content-bound cache lookup.
+      const cached = await activeStore.getIdempotentResult({ action: 'analyze', ipHash, requestId: effectiveRequestId });
+      if (!cached) throw admissionError(intake.denial);
+      chargeAdmission = false;
+      log({ route: '/api/analyze-cv', status: 200, code: 'OK', elapsedMs: now() - startedAt, meta: { transport, language, cached: true } });
+      return Response.json(cached);
+    }
     const reservation = await activeStore.reserveQuota({
       action: 'analyze',
       ipHash,
@@ -324,7 +334,7 @@ export async function handleAnalyzeCv(request, deps = {}) {
       err instanceof AppError
         ? err
         : new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE, 503);
-    if (appErr.code === ERROR_CODES.QUOTA_REACHED && appErr.meta?.action === 'aiBudget' && !providerAttempted) {
+    if (appErr.code === ERROR_CODES.QUOTA_REACHED && appErr.meta?.action === 'aiBudget' && !providerAttempted && !replayOnly) {
       chargeAdmission = false;
     }
 

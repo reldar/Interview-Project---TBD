@@ -37,6 +37,28 @@ function pdfRequest(id) {
   return new Request('http://localhost/api/analyze-cv', { method: 'POST', body: form });
 }
 
+test('an oversized Gemini HTTP body is cancelled before JSON parsing and cannot create an analysis', async () => {
+  const store = createMemoryStore();
+  let cancelled = false;
+  let calls = 0;
+  const response = await handleAnalyzeCv(request('analyze-cv', cvBody('oversized-http-response')), {
+    store, logger: silent, env: budgetEnv(4), geminiOptions: {
+      apiKey: 'test-only-key', models: ['stub'], fetchImpl() {
+        calls += 1;
+        return new Response(new ReadableStream({
+          start(stream) { stream.enqueue(new Uint8Array(512 * 1024 + 1)); },
+          cancel() { cancelled = true; },
+        }));
+      },
+    },
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: { code: 'TEMPORARILY_UNAVAILABLE' } });
+  assert.equal(calls, 1);
+  assert.equal(cancelled, true);
+  assert.equal((await store.reserveQuota({ action: 'analyze', ipHash: deriveIpHash('127.0.0.1') })).count, 1);
+});
+
 test('byte-identical CV requests share in-flight admission before PDF extraction even with different request IDs', async () => {
   const store = createMemoryStore();
   let parses = 0;

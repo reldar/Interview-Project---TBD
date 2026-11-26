@@ -50,12 +50,16 @@ GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-flash-lite-latest
 GEMINI_FALLBACK_MODELS=gemini-3.5-flash-lite,gemini-3-flash-preview
 
-# Optional Upstash Redis REST (when unset, local in-memory fallback is used)
+# Required on Vercel. When unset in local development, the in-memory store is used.
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 
-# Recommended for production IP digest keying
+# Required on Vercel, with at least 32 characters. Keys quota and answer replay digests.
 QUOTA_HMAC_SECRET=
+
+# Optional application dispatch caps (defaults shown)
+AI_UPSTREAM_REQUESTS_PER_MINUTE=10
+AI_UPSTREAM_REQUESTS_PER_DAY=60
 ```
 
 > **Security note:** Never commit `.env.local` or expose `GEMINI_API_KEY` to client code. All AI calls execute server-side using the `x-goog-api-key` header.
@@ -89,7 +93,7 @@ npm run start
 ## Verification & Scripts
 
 ```bash
-# 34 deterministic unit & integration tests (redaction, contracts, store TTL/quotas/Upstash, fault injection, PII trace)
+# Unit and integration tests (redaction, evidence, quotas, interview replay and failure recovery)
 npm test
 
 # Production build check
@@ -98,12 +102,17 @@ npm run build
 # Offline in-memory PDF parser check at 4,999,999 / 5,000,000 / 5,000,001 bytes
 npm run test:upload
 
-# Chrome 5 MB boundary test through /api/analyze-cv (requires working analysis configuration)
+# Chrome 5 MB boundary test through /api/analyze-cv (requires a configured local provider or stub)
 UPLOAD_BASE_URL=http://127.0.0.1:3000 npm run test:day1
 
-# Day 5 10-layout readable + 2 sparse + 4 invalid PDF harness (--offline for deterministic dry run)
-node scripts/check-ten-layouts.mjs --offline
-npm run test:layouts
+# Day 5 matrix with 10 readable, 2 sparse and 4 invalid PDFs and a deterministic provider stub
+npm run test:layouts -- --offline
+
+# Actual private Redis Lua and concurrent-worker check (Ubuntu WSL on Windows)
+node --experimental-default-type=module scripts/check-redis-quotas.mjs
+
+# Local wall-clock and CPU measurements without assertions tied to a host deadline
+node --experimental-default-type=module scripts/measure-evidence-cost.mjs
 ```
 
 ---

@@ -4,6 +4,100 @@ At the end of each development phase, update this checklist and HANDOFF.md with 
 
 Source: [guideline.md](guideline.md), sections 1–12. Open boxes represent remaining work. “Proposed” identifies working defaults or review suggestions that still need team agreement. A owns backend and AI, B owns frontend and UX, and both own the deployed walkthrough.
 
+## Development checkpoint before pause · 2026-11-26
+
+**Local remediation: HOLD. Staging readiness: HOLD.** The latest independent suite passed **107/107 tests**. The completed remediation, verification results and unresolved findings are preserved below. [Detailed resume instructions](HANDOFF.md#development-checkpoint-before-pause--2026-11-26)
+
+- [ ] On resume, verify `feature/mock-interview` against GitHub and review any teammate commits. Add failing regressions for the High ATS grounding and name masking findings, fix them, then address the wrapped-PDF, bilingual, vacancy, replay and identifier-only cases below.
+- [ ] Rerun the local verification matrix and obtain an independent re-review before changing the local HOLD.
+- [ ] Obtain agreement from both developers on the Vercel transport for the existing 5,000,000-byte PDF contract. Keep staging and Day 10 on HOLD pending the decision and separate authorization for deployed verification.
+
+## Independent review of the uncommitted remediation · 2026-11-26
+
+**Local remediation: HOLD. Staging readiness: HOLD.** Audited `feature/mock-interview` over `d021ce3`. The prior records below are historical. No Critical finding. [Severity, reproductions, runtime and coverage details](HANDOFF.md#independent-review-of-the-uncommitted-remediation--2026-11-26)
+
+- [x] Independently reran all 107 automated cases, production build, WSL Redis, offline PDFs, parser boundaries, both Chrome suites and repeated performance checks. Confirmed the real HTTP reset after a Redis commit and the NFC/CRLF keyed replay control.
+- [ ] **High, local** Reject unsupported ATS achievements in rewrites and explanations. Bind the 12-count example to receiving reports, keep EUR distinct from GBP, and reject invented spelled percentages.
+- [ ] **High, local** Preserve adjacent prose after initials and mask Indonesian titles and names without exposing them to the provider or export. The `Ir.` synthetic fixture leaked its labeled name. The `K. My internship` fixture returned 400 after losing its evidence.
+- [ ] **High, staging** Both developers must agree on a Vercel transport that supports the existing 5,000,000-byte PDF contract. Browser-side extraction and a reduced limit remain unimplemented. Verify deployed ingress after agreement and separate authorization.
+- [ ] **Medium** Preserve complete source evidence across PDF wrapping, broaden legitimate bilingual coverage, and repair mixed required/optional and negated vacancy clauses.
+- [ ] **Medium** Add the hold-plus-exhaustion replay case in memory and Redis, and make the shared-key requirement explicit for Redis-backed local workers. Independent controls recovered after the hold was released or after using a shared key.
+- [ ] **Low** Reject identifier-only answers and broaden simulation oracles beyond fixture-derived rewrites and worker-injected PDF extraction.
+
+| Independent check | Passed / failed / skipped | Time |
+| --- | --- | --- |
+| `npm test` | 107/0/0 | 4.077 s wall, 2.654 s TAP |
+| `npm run build` | 1/0/0 | 39.459 s |
+| `node --experimental-default-type=module scripts/check-redis-quotas.mjs`, private Redis 8.12.0 and four workers | 10/0/0 groups | 54.731 s |
+| `npm run test:layouts -- --offline`, real parser and stubbed Gemini | 16/0/0 | 3.042 s |
+| `npm run test:upload`, exact byte boundaries | 3/0/0 | 2.889 s |
+| `npm run test:day1 -- --interview-replay`, localhost 3912 and stubbed Gemini | 7/0/0 | 13.861 s |
+| `node --experimental-default-type=module scripts/check-workspace.cjs`, production build and intercepted APIs on localhost 3911 | 7/0/0 | 17.545 s |
+| `node --experimental-default-type=module scripts/measure-evidence-cost.mjs`, three runs | 27/0/0 workload-size groups | 5.914 s |
+| Focused deterministic checks, eight runs pinned to one core | 16/0/224 filtered | 3.609 s |
+| Source/client credential and server-marker scans | 3/0/0 checks, zero matches in 26 client files | 0.649 s |
+| `git diff --check` and `git diff --cached --check` | 2/0/0 checks | 0.149 s, no whitespace errors |
+
+Supplemental local probes took 0.741 s, 1.047 s for the real wrapped PDF and baseline comparison, 13.677 s against WSL Redis, and 2.597 s for the 120-keyword workload across three sizes. The largest warmed standard workload took a median 3.72–3.99 ms wall time. The 120-keyword maximum took a median 7.99 ms. These timings cover local validation only. Live Gemini, live layout calibration, hosted Upstash and deployed ingress were skipped. The only audit edits are these two documents.
+
+## Targeted local remediation over `d021ce3` · 2026-11-26
+
+`feature/mock-interview` remains at `d021ce3ebb4381a197c47bddbbd8de469abd8a0f`. The working diff is for independent review. The prior audit and milestones are retained below. [Reproductions, implementation choices, upload options and verification](HANDOFF.md#targeted-local-remediation-over-d021ce3--2026-11-26)
+
+**PASS for local remediation.** Staging and Day 10 have open gates.
+
+- [x] Reproduced the fabricated ATS facts, rejected translation, incorrectly replayed distinct answers and equivalent CV retries receiving 429 before editing.
+- [x] Ground exact source bullets, prevent numeric unit/action changes and recognized responsibility, credential and impact inflation, and cover supported bilingual paraphrases and adverse cases. Document limitations of deterministic grounding.
+- [x] Preserve answer evidence during name masking. Use scoped replay hashes for new submissions and compatible masked evidence for older records. Verify retries, 409 conflicts, expiry and the real local handler path.
+- [x] Publish a bounded canonical replay marker with the successful CV result. Test quota and budget exhaustion using memory and real Redis without new success charges or model dispatches.
+- [x] Replace the wall-clock test gate with deterministic checks, measure isolated scaling, and strengthen browser, PDF matrix and disconnect assertions.
+- [ ] Obtain product approval for browser-side extraction near the safe Vercel request-body ceiling while retaining 5,000,000-byte file selection, or approve a reduced 4,400,000-byte shared cap. Preserve current app and transport until approved. Staging and Day 10 remain on hold.
+
+| Executed check | P/F/S and time | Observable result and environment |
+| --- | --- | --- |
+| `npm test` | 107/0/0, 3.551 s | Baseline 99 plus eight added cases. Real local handlers and validation, memory and provider/REST doubles. |
+| `npm run build` | 1/0/0, 43.371 s final build | Four production API routes compiled. Public diagnostic absent. |
+| `node --experimental-default-type=module scripts/check-redis-quotas.mjs` | 10/0/0 groups, 57.280 s | Real private WSL Redis 8.12.0/Lua and four Node workers. Final-slot replay, changed-payload rejection, genuine HTTP disconnect after commit and session isolation passed. Upstream services and worker PDF extraction stubbed. |
+| `npm run test:layouts -- --offline` | 16/0/0, 2.169 s | Real parser and metered handler, ten readable and two sparse 200s, four invalid 422s, and expected keyword sets. Gemini transport stub. |
+| `npm run test:upload` | 3/0/0, 2.147 s | Real parser accepted both valid sizes and rejected 5,000,001 B. |
+| `npm run test:day1 -- --interview-replay` on localhost 3912 | 7/0/0, 15.065 s | Six browser/server boundary checks and the added Chrome recovery flow. Both valid upload sizes worked. A committed answer was recovered with a single scoring dispatch and conflict returned 409. Real browser/parser/handlers with a local Gemini transport stub. |
+| `node --experimental-default-type=module scripts/check-workspace.cjs` on localhost 3911 | 7/0/0, 17.707 s | Seven production-build Chrome flows with intercepted APIs. The final harness verifies the keyboard file chooser via Chrome protocol events and checks independent rubric averages. |
+| Focused ATS bounds and marker-bearing redaction checks, eight concurrent runs pinned to one CPU | 16/0/224, 5.217 s | All selected functional checks passed under contention. Unrelated cases filtered. |
+| `node --experimental-default-type=module scripts/measure-evidence-cost.mjs`, three runs | 27/0/0 workload-size groups, 6.398 s | Largest-input valid median 3.76–4.51 ms wall and 3.90–4.70 ms CPU. Local synthetic evidence/redaction workload. |
+| Worktree and generated-client `rg` credential and marker scans | 3/0/0 checks, 0.298 s | No known credential patterns or server credential markers found. Scanned 26 built client files. |
+| `git diff --check` and `git diff --cached --check` | 2/0/0 checks | No whitespace errors. |
+
+Live layouts, Gemini, hosted Upstash and deployment checks remain open. Local runs do not establish deployed latency, live rewrite quality or complete redaction. No upload product change was made.
+
+## Independent staging audit of `d021ce3` · 2026-11-26
+
+**HOLD for staging preparation and Day 10.** Audited `feature/mock-interview` at `d021ce3ebb4381a197c47bddbbd8de469abd8a0f` over `591f411`. The branch started clean and matched the upstream ref and GitHub branch tip (0 ahead, 0 behind). [Ranked findings, reproduction evidence, and coverage limits](HANDOFF.md#independent-staging-audit-of-d021ce3--2026-11-26)
+
+| Independently executed command | P/F/S and time | Expected and actual behavior, environment and limits |
+| --- | --- | --- |
+| `npm test` | 99/0/0, 2.383 s TAP | All expected outcomes passed with real local handlers and validators, memory and mocked provider/REST responses. No deployed transport. |
+| `node --experimental-default-type=module --test --test-concurrency=1` | 99/0/0, 3.798 s | All cases passed serially, including timing assertions. Same local doubles. |
+| `npm run build` | 2/0/0 runs, 25.921 s timed rerun | Both real local production builds passed and listed all four expected API routes. Upload diagnostic absent. Runtime credentials and ingress remain separate checks. |
+| `node --experimental-default-type=module scripts/check-redis-quotas.mjs` | 8/0/0 groups, 40.091 s timed rerun | Verified private socket, vote/TTL, CV and interview fencing, budget accounting and contention, equivalent PDF replay and Jakarta rollover. Real WSL Ubuntu Redis 8.12.0 and four workers with stubbed transport and Gemini. No hosted REST/TLS or real disconnect after commit. |
+| `node --experimental-default-type=module scripts/check-ten-layouts.mjs --offline` | 16/0/0, 1.116 s | Expected and got 10 readable plus 2 sparse HTTP 200s and 4 invalid HTTP 422s with zero provider calls. Real parser/route, fixture-derived model and memory. Local timings exclude browser and live provider. Expected skills, translations and semantic quality need independent checks. |
+| `NODE_OPTIONS=--experimental-default-type=module npm run test:upload` | 3/0/0, 1.864 s | Real parser accepted 4,999,999 and 5,000,000 B and rejected 5,000,001 B. Simple padded PDFs. No browser or ingress. |
+| `npm run test:day1` on local `next dev --webpack` at port 3912 | 6/0/0, 12.382 s | Expected and got diagnostic 404, server oversize 413, two localized browser oversize rejections without upload, and 200/visible score at both valid sizes. Real Chrome, HTTP, parser and handler with local memory and a Gemini fetch stub that inspected extracted text. Vercel, live model and hosted store remain unverified. |
+| `node --experimental-default-type=module scripts/check-workspace.cjs` on local `next start` at port 3911 | 7/0/0, 22.294 s | Two CV flows, all four live-mode combinations through Q5 and the offline example passed. Real Chrome and built UI with intercepted APIs. Keyboard, accessibility tree, bilingual recovery, interrupted-response stubs and downloads exercised. No real simultaneous browser users, server disconnect or screen-reader speech. |
+| `node --experimental-default-type=module --test --test-name-pattern='STD-MED-01: rejects\|security regressions: linear EMAIL_RE' tests/unit-cv-evidence-ownership.test.mjs tests/unit-redact-contracts.test.mjs` | Normal 20/0/240 over 10 runs, 2.823 s. Single-core contention 11/5/192 over 8 runs, 3.403 s. | Real validator and redactor. Both functional rejections preceded the timed check. The ATS timing assertion failed at 149.25–510.12 ms in five loaded runs. Redaction timing passed. Skips are filtered cases. |
+| `git diff --check 591f411..HEAD`, `git diff --check`, `git diff --cached --check`, tracked/client credential and bundle-marker scans | 6/0/0 checks, 0.243 s Git and 0.309 s scans | No whitespace errors or matched secrets across 53 tracked files and 26 generated client files. Hosted environment values, logs and arbitrary secret formats remain unverified. |
+
+The two PDF commands without Node's ESM flag and two early boundary server startup attempts failed before any cases ran. These attempts are preserved in the handoff. Live `npm run test:layouts` was skipped (0/0/16), and live Gemini, hosted Upstash, deployed ingress and the Day 10 matrix remain open. The historical temporary axe runner and screen-reader speech were not rerun. Five independent color calculations cleared their applicable contrast thresholds.
+
+Inline `node --experimental-default-type=module --input-type=module` probes used synthetic data and local model/storage doubles. ATS and equivalent-retry behavior missed 11 audit expectations (1.014 s and 0.436 s). Interview replay failed and export exclusion passed (0.390 s). Masking and contrast returned 6/2/0 (0.715 s). Interview start recovered as expected after three budget denials with zero dispatches (one group, 0.675 s). The handoff preserves the individual expected and actual outputs.
+
+- [x] Confirm the branch, compare all changes since `591f411`, execute the existing offline/local suites and record their boundaries.
+- [ ] **High** Fix ATS original/claim grounding, sparse rewrite enforcement and supported bilingual translations. Regress fabricated metrics, changed metric units and unsupported qualitative outcomes.
+- [ ] **High** Correct name masking and replay identity so different answers remain distinct and the candidate's evidence survives in both languages.
+- [ ] **High** Resolve the 5 MB product promise against the documented Vercel default and verify the chosen transport and plan.
+- [ ] **Medium** Preserve equivalent CV replay after quota/budget exhaustion. Cover negated and ambiguous skills, residual PII and prompt-dependent score integrity. Bring the live layout runner under production dispatch accounting.
+- [ ] **Low** Make timing and simulator oracles independent, show the feedback reset time, and align README and policy with the current runtime/configuration. Add a real local browser-to-handler/Redis path with simultaneous users, duplicate submissions and an interrupted connection after commit.
+- [ ] **Next** Remediate and independently rerun the local release candidate. Resolve the recorded product-scope decision. Once separately authorized, run staging ingress, hosted Redis, provider configuration/privacy, and then the Day 10 deployment matrix with fictional inputs.
+
 ## Day 9B · Targeted remediation & independent review follow-up
 
 **Local remediation & review follow-up PASS (ready for Day 9C).** Branch `feature/mock-interview`, committed over `591f411601fd688029d8bdca992e3265473d24d7`.

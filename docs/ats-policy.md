@@ -37,13 +37,10 @@ For every analysis, `GEMINI_ATS_SCHEMA` requires `rewrites` as an array of `{ or
    - Section headers (e.g., `Experience`, `Pengalaman Kerja`, `Education`, `Pendidikan`, `Skills`, `Keahlian`, `Projects`, `Summary`, `Profil`) are rejected as `original` (`HEADER_ONLY_LINE_RE`).
    - Duplicate `original` strings (after trace normalization) are rejected.
 3. **Verbatim traceable `original`:**
-   - `buildAtsPrompt` instructs the model to copy `original` verbatim in its source wording without translating or paraphrasing.
-   - `tracesToSource(original, sanitizedCvText)` (`lib/contracts.js`) verifies traceability by checking either:
-     - exact normalized substring match (`normOrig.length >= 8` and `normSource.includes(normOrig)`), or
-     - at least 2 content words (excluding ID/EN stopwords) with **≥ 60% content-word overlap** against any 1-, 2-, or 3-segment window of `sanitizedCvText`.
-4. **Zero invented metrics or numbers in `improved`:**
-   - `buildAtsPrompt` prohibits introducing any number, percentage (`%`), dataset size, team size, currency, duration, or outcome metric in `improved` unless that exact number already appears in `<cv_data>`.
-   - `introducesInventedNumbers(improved, original, sanitizedCvText)` (`lib/contracts.js`) extracts numeric tokens (including decimals and `%`, normalizing comma/dot decimals such as `99,5%` ↔ `99.5%` and thousand separators such as `10,000` / `10.000` ↔ `10000`) and rejects the payload if `improved` contains any numeric value absent from `original` and `sanitizedCvText`.
+   - `buildAtsPrompt` requests an exact quote in the source language. Validation requires one full eligible source bullet or action sentence. It ignores case, bullet markers, whitespace, and terminal sentence punctuation. Reordering, concatenating passages, and importing facts from elsewhere in the CV fail validation.
+4. **Metric and claim grounding in `improved`:**
+   - Each recognized numeric mention must map to a distinct mention in the quoted bullet with the same value, unit, and supported nearby action and scope. Recognized decimal and grouping formats allow equivalents such as `99,5%` and `99.5%` or `10,000` and `10000`. Dates remain dates. Counts of reports cannot become counts of outages, and hours worked cannot become hours saved.
+   - The validator checks supported tools, role and contribution cues, and recognizable qualifications and outcomes in ID and EN. It looks for source anchors in a paraphrase and permits new phrasing beyond the recognized claim groups. These lexical and contextual checks catch specific classes of mistakes. They cannot prove semantic equivalence, infer every measurement or implicit outcome, determine all vacancy requirements, or disambiguate every translation. An honest rewrite without a recognized anchor can still fail. Candidate review and fictional live calibration remain necessary. Validation adds no model call.
 5. **Asking for missing evidence in `reason`:**
    - `improved` and `reason` are written in the selected language (`id` or `en`), preserving technical proper nouns in standard form.
    - When quantitative scope or outcomes are missing from the source bullet, `reason` explains the improvement and asks the candidate for that specific detail instead of inventing it.
@@ -58,7 +55,7 @@ To prevent hallucinated work experience on thin student/fresh-graduate CVs (`gui
 - **Exception behavior when `candidateBulletCount < 3`:**
   - **0 bullets:** `buildAtsPrompt` requires `rewrites: []` and forbids converting section headers, degrees, university names, or skill lists into fabricated bullets.
   - **1 or 2 bullets:** `buildAtsPrompt` limits `rewrites` to at most `candidateBulletCount`, corresponding solely to genuine bullets in `<cv_data>`.
-  - `validateAnalysisPayload` lowers `minRewrites` from `3` to `0`, validates any returned rewrites using the full traceability and no-invented-numbers checks, preserves valid `atsScore`, `matchedKeywords`, and `missingKeywords`, and returns `{ candidateBullets, isSparse: cleanRewrites.length < 3 }`.
+  - `validateAnalysisPayload` lowers `minRewrites` from `3` to `0` and caps rewrites at the number of distinct eligible bullets. It validates each rewrite, preserves valid score and keyword groups, and returns `{ candidateBullets, isSparse: cleanRewrites.length < 3 }`.
   - `buildCvReportText` (`lib/contracts.js`) preserves the score and keyword sections and outputs an explicit localized shortfall note (either explaining why `< 3` rewrites are shown, or prompting the candidate to add coursework, internship, organization, or project bullets when `rewrites.length === 0`).
 
 ### 1.5 Empty Keyword Group Handling
@@ -165,16 +162,16 @@ In `validateAnalysisPayload` (`lib/contracts.js`):
 ### 3.5 Independent Daily IP Quotas & Storage Architecture (`lib/store.js`)
 - **Independent caps (`DAILY_LIMITS` in `lib/contracts.js`):** `analyze: 5` and `interviewStart: 3` per IP per calendar day in `Asia/Jakarta` (`UTC+7`, resetting at Jakarta `00:00:00` via `getJakartaDayWindow`). Expiring a 90-minute session does **not** replenish either daily quota.
 - **HMAC-SHA256 IP digest (`deriveIpHash` in `lib/store.js`):**
-  - Resolves client IP in precedence order `x-vercel-forwarded-for` (first entry) → `x-forwarded-for` (first entry) → `x-real-ip` → `'127.0.0.1'`, lowercases it, and computes an HMAC-SHA256 hex digest keyed by `QUOTA_HMAC_SECRET` (falling back to `UPSTASH_REDIS_REST_TOKEN` or `'latihkerja-local-quota-hmac-v1'` in local development; production deployments should set `QUOTA_HMAC_SECRET` explicitly).
+  - Production requires a valid single address from the trusted Vercel `x-vercel-forwarded-for` header and a `QUOTA_HMAC_SECRET` of at least 32 characters. Development uses loopback and a local fallback. New interview replay uses a domain-separated HMAC with session and question scope and the same configured secret. The memory-only development fallback uses a process-local random key.
 - **Atomic reservation, release-on-failure, and 15-minute idempotency:**
   - All request inputs and PDF parseability are validated **before** `reserveQuota` runs (`app/api/analyze-cv/route.js`), so `400`, `413`, `415`, and `422` errors consume zero quota.
   - `reserveQuota` checks `idem:${action}:${ipHash}:${effectiveRequestId}` first, where `handleAnalyzeCv` derives `effectiveRequestId` via `SHA-256(requestId + "\0" + language + "\0" + sanitizedCvText + "\0" + sanitizedJd)` (for optional `requestId` / `x-request-id` matching `/^[A-Za-z0-9._:-]{1,128}$/`). Payload binding ensures retries of the identical request replay cleanly while preventing shared-NAT collisions across different CVs.
-  - Otherwise it atomically checks `cur < limit`, increments `quota:${action}:${dateKey}:${ipHash}` (setting expiry to Jakarta midnight on first increment), and creates a 2-minute (`120,000 ms`) reservation hold (`resv:${reservationId}`).
-  - On completion, `commitQuota` deletes the hold and caches the response under `idem:...` for **15 minutes** (`900,000 ms`).
-  - On failure in `finally`, `releaseQuota` atomically deletes the hold and decrements the daily counter (preserving remaining `PTTL`, floored at `0`).
+  - The store checks committed successes plus live holds against the limit and takes an owned two-minute reservation. The CV route separately acquires a bounded pre-parser lease.
+  - `commitQuota` publishes the session, increments committed successes and caches the canonical response atomically. The response and a logical retry marker expire after **15 minutes**. The marker is scoped to a network identity, request ID, analysis language and vacancy. After daily success or shared-budget exhaustion, it admits bounded replay-only parsing. The canonical content must still match a committed response. A cache miss keeps the existing limit, and neither path can dispatch generation.
+  - Failure releases the temporary hold. The success count remains unchanged, and separate admission controls can charge for parse or generation attempts.
 - **Upstash Redis REST (fail-closed) + local in-memory fallback (`createStore` / `getStore`):**
   - When `UPSTASH_REDIS_REST_URL` or `UPSTASH_REDIS_REST_TOKEN` is configured, `createUpstashStore` executes atomic Lua scripts (`RESERVE_QUOTA_LUA`, `COMMIT_QUOTA_LUA`, `RELEASE_QUOTA_LUA`, `CAS_SESSION_LUA`, `RECORD_FEEDBACK_LUA`) over Upstash REST `fetch` (`5,000 ms` timeout). Any missing partial credential, network/timeout failure, non-OK HTTP status, or Redis error **fails closed with `503 TEMPORARILY_UNAVAILABLE`** — quotas are never bypassed.
-  - When neither Upstash environment variable is set, `createMemoryStore` provides matching semantics (with injectable `now()` clock for deterministic tests).
+  - Production also requires the HTTPS Upstash endpoint, token and trusted Vercel runtime. `createMemoryStore` covers local development and tests with an injectable clock.
 - **Aggregate feedback store (`app/api/feedback/route.js`):**
   - `POST /api/feedback` validates `{ sessionId, positive, language }` (max 4,096 JSON bytes). The first vote from a live CV session updates the aggregate totals and language breakdown in `stats:feedback`. A temporary marker expires with the session. A separate 60-second counter, keyed by the same IP digest used for analysis limits, allows up to ten attempts per network address across workers. Redis checks and records the vote in one operation. Historical aggregate counts remain in place.
 
