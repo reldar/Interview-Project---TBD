@@ -515,7 +515,7 @@ export default function Workspace() {
     const requestId =
       reuseRequestId && requestIdRef.current
         ? requestIdRef.current
-        : requestIdRef.current || generateRequestId();
+        : generateRequestId();
     requestIdRef.current = requestId;
 
     const submitLang = lang;
@@ -586,6 +586,7 @@ export default function Workspace() {
         return;
       }
 
+      resetDraftRequestId();
       setRealAnalysis({
         sessionId: data.sessionId,
         atsScore: data.atsScore,

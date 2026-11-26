@@ -19,6 +19,13 @@ async function blockUnexpectedApis(page) {
   await page.route('**/api/**', (route) => route.abort());
 }
 
+function extractMultipartRequestId(route) {
+  const bodyBuf = route.request().postDataBuffer() || Buffer.from('');
+  const bodyStr = bodyBuf.toString('utf8');
+  const match = bodyStr.match(/name="requestId"\r\n\r\n([^\r\n]+)/);
+  return match ? match[1] : null;
+}
+
 (async () => {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   try {
@@ -38,10 +45,8 @@ async function blockUnexpectedApis(page) {
       let attempt = 0;
       await page.route('**/api/analyze-cv', async (route) => {
         attempt += 1;
-        const bodyBuf = route.request().postDataBuffer() || Buffer.from('');
-        const bodyStr = bodyBuf.toString('utf8');
-        const m = bodyStr.match(/name="requestId"\r\n\r\n([^\r\n]+)/);
-        if (m) capturedRequestIds.push(m[1]);
+        const requestId = extractMultipartRequestId(route);
+        if (requestId) capturedRequestIds.push(requestId);
 
         if (attempt === 1) {
           // Simulate transient 503 to verify draft preservation, no 0/100 score, and retry with same requestId.
@@ -161,6 +166,16 @@ async function blockUnexpectedApis(page) {
       await recovered;
       await page.locator('#api-error').waitFor({ state: 'hidden' });
       assert.equal(capturedRequestIds.length, 5);
+      assert.notEqual(
+        capturedRequestIds[2],
+        capturedRequestIds[1],
+        'New analysis after 200 OK must generate a fresh requestId'
+      );
+      assert.equal(
+        new Set(capturedRequestIds.slice(1)).size,
+        4,
+        'Each new submission after 200 OK must send a distinct requestId'
+      );
 
       // Keyboard Tab accessibility sanity + zero horizontal overflow.
       await page.keyboard.press('Tab');
@@ -182,8 +197,11 @@ async function blockUnexpectedApis(page) {
       page.on('pageerror', (err) => errors.push(err.message));
       await blockUnexpectedApis(page);
       let analyses = 0;
+      const analyzeRequestIds = [];
       await page.route('**/api/analyze-cv', (route) => {
         analyses += 1;
+        const requestId = extractMultipartRequestId(route);
+        if (requestId) analyzeRequestIds.push(requestId);
         return route.fulfill({ json: { ...analysis, sessionId: `${sessionId}_${analyses}` } });
       });
       const starts = [];
@@ -397,6 +415,12 @@ async function blockUnexpectedApis(page) {
       assert.deepEqual(starts, [1, 1, 1, 2].map((n) => ({
         sessionId: `${sessionId}_${n}`, language, mode,
       })));
+      assert.equal(analyzeRequestIds.length, 2);
+      assert.notEqual(
+        analyzeRequestIds[1],
+        analyzeRequestIds[0],
+        'Run a new CV analysis after session expiry must generate a fresh requestId'
+      );
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
       assert.deepEqual(errors, []);
       if (process.env.SCREENSHOT_DIR) {

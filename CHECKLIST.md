@@ -4,22 +4,22 @@ At the end of each development phase, update this checklist and HANDOFF.md with 
 
 Source: [guideline.md](guideline.md), sections 1–12. Open boxes represent remaining work. “Proposed” identifies working defaults or review suggestions that still need team agreement. A owns backend and AI, B owns frontend and UX, and both own the deployed walkthrough.
 
-## Day 9B · Targeted remediation
+## Day 9B · Targeted remediation & independent review follow-up
 
-**Local remediation PASS. Independent Sol Ultra review pending.** Branch `feature/mock-interview`, uncommitted over `d8efc366f56e66e0c45a2e006be7ec6cf58134cc`.
+**Local remediation & review follow-up PASS (ready for Day 9C).** Branch `feature/mock-interview`, committed over `591f411601fd688029d8bdca992e3265473d24d7`.
 
-- [x] Reproduced both High findings before implementation. Fenced canonical CV reservation and session publication, grounded ATS rewrites and keyword matches, and corrected the release-after-commit mock.
-- [x] **90/90 Node tests** including the original 87, production build, seven stubbed Chrome flows and real Redis Lua verification passed. Equivalent PDFs across independent workers produced one HTTP dispatch, one successful allowance charge and one replayable session. Credential-pattern and whitespace checks passed.
-- [ ] Independent review before Day 9C. The prior audit below records the original findings. See [remediation evidence and limits](HANDOFF.md#day-9b-remediation-for-independent-sol-ultra-review).
+- [x] Reproduced both High findings before implementation (`591f411`). Fenced canonical CV reservation and session publication, and corrected the release-after-commit mock.
+- [x] Independent review verified canonical CV ownership (`High #1`) and remediated follow-up Day 9B blockers: replaced closed 67-word `groundedRewrite` allowlist with principled EN/ID/cross-language evidence & anti-hallucination guards (`SPEC-HIGH-01`/`SPEC-HIGH-02`), added O(n) pre-tokenization and keyword/rewrite length caps (`STD-MED-01`), fixed `scripts/check-ten-layouts.mjs --offline` (`SPEC-MED-01`), cleared stale `requestIdRef` on `200 OK` in `app/page.jsx` (`SPEC-MED-02`), hardened XML delimiter escaping (`STD-LOW-01`), stripped `app/interview.jsx` UTF-8 BOM (`STD-LOW-02`), and added Lua skew/`undefined`-commit guards (`STD-LOW-03`).
+- [x] **96/96 Node tests** (twice back-to-back with cleared credentials), `scripts/check-ten-layouts.mjs --offline` (**10/10** readable + **2/2** sparse + **4/4** invalid), production build, `scripts/check-upload.mjs` (3/3), **7/7** stubbed Chrome flows (`375–1440 px`), credential/bundle/log scans, and `git diff --check` passed. *(Note: real Redis Lua script `scripts/check-redis-quotas.mjs` was not re-run on macOS because `redis-server` is unavailable on this host—rerun on WSL Redis / staging before release.)* See [Day 9B independent review & follow-up remediation](HANDOFF.md#day-9b-independent-review--follow-up-remediation--2026-11-26).
 
 ## Day 9B · Independent audit
 
-**HOLD before Day 9C.** Audited `feature/mock-interview` at `d8efc366f56e66e0c45a2e006be7ec6cf58134cc`. The checkpoint remains unchanged. See [the audit record](HANDOFF.md#day-9b-independent-audit) for references, reproductions and proposed fixes.
+**Resolved locally (ready for Day 9C).** Originally audited `feature/mock-interview` at `d8efc366f56e66e0c45a2e006be7ec6cf58134cc`, then re-audited and remediated over `591f411`. See [the audit record](HANDOFF.md#day-9b-independent-audit) for original references and reproductions.
 
 - [x] **Audit and local verification** — Reviewed the original CV slice, Days 6–9B, and all 87 baseline test cases. **87/87 tests, the production build, seven stubbed Chrome flows, the four-worker Redis Lua harness and `git diff --check` passed.** Credential scans found no matching secret patterns in tracked files or generated client assets.
-- [ ] **New high-severity CV findings** — Atomically claim the canonical replay identity across equivalent uploads before Gemini dispatch. A focused route probe confirmed duplicate calls and success charges with both memory and real Redis. Require evidence for ATS rewrite claims and reported matches. A fictional stub response confirmed acceptance of unsupported claims.
-- [ ] **Day 9C · Blocked** — After review clears the CV findings, preserve live drafts and committed feedback across mode changes and interrupted requests. A focused 375 px Chrome check reproduced both losses. Improve bilingual recovery and practical privacy safeguards.
-- [ ] **Before public release** — Close or protect the upload diagnostic, protect feedback metrics, and verify residual PII, prompt grounding, selected provider settings, free-tier capacity and accessibility. Real Upstash, deployed Vercel ingress and upload limits, live Gemini evaluation and the Day 5 ten-layout rerun remain pending.
+- [x] **New high-severity CV findings** — Atomically claim the canonical replay identity across equivalent uploads before Gemini dispatch (`591f411`, verified PASS). Require evidence for ATS rewrite claims and reported matches without rejecting honest EN/ID/cross-language rewrites (remediated over `591f411`, verified **96/96** tests + offline ten-layout harness).
+- [ ] **Day 9C · Ready** — Preserve live drafts and committed feedback across mode changes and interrupted requests (reproduced on 375 px Chrome), show active mode/language during Q1–Q5, and improve bilingual recovery and practical privacy safeguards.
+- [ ] **Before public release** — Close or protect the upload diagnostic, protect feedback metrics, re-run `scripts/check-redis-quotas.mjs` on Redis for the `lib/store.js` Lua guard, refresh stale `README.md`/`docs/ats-policy.md`, and verify residual PII, prompt grounding, selected provider settings, free-tier capacity and accessibility. Real Upstash, deployed Vercel ingress and upload limits, live Gemini evaluation and the Day 5 ten-layout rerun remain pending.
 
 ## Day 1 · Prove the upload path and agree on contracts (§§1–5, 12)
 

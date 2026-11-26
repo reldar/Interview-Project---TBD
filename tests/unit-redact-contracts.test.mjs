@@ -625,4 +625,93 @@ describe('Input & Analysis Contracts (§§4, 5, 7) — lib/contracts.js', () => 
     );
     assert.equal(badKwMissing.ok, false);
   });
+
+  it('grounds multi-word/dotted aliases and singular/plural stems without breaking short tokens or bounds', () => {
+    const cv = [
+      'SKILLS: Microsoft Excel, React.js, Node.js, Power BI, Google Sheets, REST APIs, CI/CD, Go, R, C',
+      '- Wrote unit test suites and SQL query scripts to validate dataset schemas.',
+    ].join('\n');
+    const jd = [
+      'Engineer role requiring Excel, React, NodeJS, Microsoft Power BI, GSheets, REST API, CICD, Go, R, C, TypeScript.',
+      'Must write unit tests and optimize SQL queries across large datasets.',
+    ].join('\n');
+
+    const valid = validateAnalysisPayload(
+      {
+        atsScore: 84,
+        matchedKeywords: [
+          'Excel',
+          'React',
+          'Node.js',
+          'Power BI',
+          'Google Sheets',
+          'REST API',
+          'CI/CD',
+          'unit tests',
+          'queries',
+          'datasets',
+          'Go',
+          'R',
+          'C',
+        ],
+        missingKeywords: ['TS'],
+        rewrites: [
+          {
+            original: 'Wrote unit test suites and SQL query scripts to validate dataset schemas.',
+            improved: 'Developed unit tests and SQL queries to verify dataset schemas.',
+            reason: 'Clarifies verification scope.',
+          },
+        ],
+      },
+      cv,
+      { sanitizedJd: jd }
+    );
+    assert.equal(valid.ok, true, valid.reason);
+
+    // Short tokens (go, js, ts, r, c) must not false-match inside ordinary words or React.js
+    const proseCv = 'Built good clean project charts in React.js.';
+    const shortTokenJd = 'Go, JS, TS, R, C, and React required.';
+    for (const shortTok of ['Go', 'JS', 'TS', 'R', 'C']) {
+      const badShort = validateAnalysisPayload(
+        {
+          atsScore: 60,
+          matchedKeywords: ['React', shortTok],
+          missingKeywords: [],
+          rewrites: [
+            {
+              original: proseCv,
+              improved: 'Developed clean project charts using React.js.',
+              reason: 'Clarifies tool.',
+            },
+          ],
+        },
+        proseCv,
+        { sanitizedJd: shortTokenJd }
+      );
+      assert.equal(badShort.ok, false, `Short token "${shortTok}" should not false-match in "${proseCv}"`);
+    }
+
+    // Hard bounds on keyword length (>100) and rewrite field length (>600)
+    assert.equal(
+      validateAnalysisPayload(
+        { ...FIXTURES.en.response, matchedKeywords: ['a'.repeat(101)] },
+        FIXTURES.en.cvText
+      ).ok,
+      false
+    );
+    assert.equal(
+      validateAnalysisPayload(
+        {
+          ...FIXTURES.en.response,
+          rewrites: [
+            { ...FIXTURES.en.response.rewrites[0], reason: 'r'.repeat(601) },
+            FIXTURES.en.response.rewrites[1],
+            FIXTURES.en.response.rewrites[2],
+          ],
+        },
+        FIXTURES.en.cvText
+      ).ok,
+      false
+    );
+  });
 });

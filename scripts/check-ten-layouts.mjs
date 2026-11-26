@@ -94,13 +94,90 @@ function median(sorted) {
   return (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+const HARNESS_ENV = Object.freeze({
+  VERCEL: '1',
+  VERCEL_ENV: 'production',
+  QUOTA_HMAC_SECRET: 'local-ten-layout-check-secret-32chars',
+});
+
+const STUB_MISSING_CANDIDATES = [
+  'Apache Airflow',
+  'Looker Studio',
+  'Power BI',
+  'REST APIs',
+  'TypeScript',
+  'Playwright',
+  'Tableau',
+  'Looker',
+  'Git',
+  'SQL',
+];
+
+function pickStubMissingKeywords(spec) {
+  const jdLower = String(spec.sampleJobDescription || '').toLowerCase();
+  const matchedLower = new Set(
+    (spec.expectedSkills || []).map((skill) => String(skill).toLowerCase())
+  );
+  for (const candidate of STUB_MISSING_CANDIDATES) {
+    const lower = candidate.toLowerCase();
+    if (!matchedLower.has(lower) && jdLower.includes(lower)) {
+      return [candidate];
+    }
+  }
+  return [];
+}
+
+function paraphraseStubBullet(orig, language) {
+  const rules =
+    language === 'id'
+      ? [
+          [/^Menyusun\b/, 'Menyiapkan'],
+          [/^Membuat\b/, 'Mengembangkan'],
+          [/^Membantu\b/, 'Mendukung'],
+          [/^Menyiapkan\b/, 'Mendokumentasikan'],
+          [/^Built\b/, 'Mengembangkan'],
+          [/^Cleaned\b/, 'Membersihkan'],
+          [/^Maintained\b/, 'Memelihara'],
+          [/^Coordinated\b/, 'Mengoordinasikan'],
+          [/^Helped\b/, 'Mendukung'],
+          [/^Wrote\b/, 'Mendokumentasikan'],
+        ]
+      : [
+          [/^Built\b/, 'Developed'],
+          [/^Helped prepare\b/, 'Supported preparing'],
+          [/^Helped\b/, 'Supported'],
+          [/^Wrote step-by-step instructions\b/, 'Documented step-by-step instructions'],
+          [/^Wrote\b/, 'Developed'],
+          [/^Automated\b/, 'Implemented automated'],
+          [/^Created\b/, 'Developed'],
+          [/^Maintained\b/, 'Updated and maintained'],
+          [/^Extracted\b/, 'Queried'],
+          [/^Verified\b/, 'Validated'],
+          [/^Standardized\b/, 'Unified'],
+          [/^Refactored\b/, 'Improved'],
+          [/^Designed\b/, 'Created'],
+          [/^Guided\b/, 'Supported'],
+          [/^Graded\b/, 'Reviewed'],
+          [/^Modeled\b/, 'Designed'],
+          [/^Documented\b/, 'Compiled documentation for'],
+          [/^Coordinated\b/, 'Organized'],
+        ];
+
+  for (const [pattern, replacement] of rules) {
+    if (pattern.test(orig)) {
+      return orig.replace(pattern, replacement);
+    }
+  }
+  return language === 'id' ? `Memperjelas: ${orig}` : `Clarified: ${orig}`;
+}
+
 function createOfflineStubProvider(spec) {
   return async () => {
     const rewrites = spec.expectedBullets.slice(0, 3).map((b) => {
       const orig = b.replace(/^-\s*/, '');
       return {
         original: orig,
-        improved: orig,
+        improved: paraphraseStubBullet(orig, spec.language),
         reason:
           spec.language === 'id'
             ? 'Memperjelas tindakan sesuai CV. Tambahkan metrik jika diketahui.'
@@ -110,7 +187,7 @@ function createOfflineStubProvider(spec) {
     return JSON.stringify({
       atsScore: spec.expectedBullets.length === 0 ? 42 : 76,
       matchedKeywords: spec.expectedSkills,
-      missingKeywords: ['Looker'],
+      missingKeywords: pickStubMissingKeywords(spec),
       rewrites,
     });
   };
@@ -123,7 +200,7 @@ function makeUploadRequest(bytes, filename, jobDescription, language, ip) {
   form.append('language', language);
   return new Request('http://localhost:3000/api/analyze-cv', {
     method: 'POST',
-    headers: { 'x-forwarded-for': ip },
+    headers: { 'x-vercel-forwarded-for': ip },
     body: form,
   });
 }
@@ -170,6 +247,7 @@ async function runValidSpec({ spec, pdfBytes, ip, offline, store }) {
   const res = await handleAnalyzeCv(req, {
     store,
     provider: observingProvider,
+    env: HARNESS_ENV,
     logger: () => {},
   });
   const latencyMs = Math.round(performance.now() - t0);
@@ -205,6 +283,11 @@ async function runValidSpec({ spec, pdfBytes, ip, offline, store }) {
     }
   }
 
+  const stubParaphrasedOk =
+    !offline ||
+    (Array.isArray(body?.rewrites) &&
+      body.rewrites.every((rw) => rw.improved !== rw.original));
+
   const passed =
     res.status === 200 &&
     orderCheck.ok &&
@@ -215,7 +298,8 @@ async function runValidSpec({ spec, pdfBytes, ip, offline, store }) {
     Number.isInteger(body?.atsScore) &&
     body.atsScore >= 0 &&
     body.atsScore <= 100 &&
-    rewriteCheckOk;
+    rewriteCheckOk &&
+    stubParaphrasedOk;
 
   const notes = [];
   if (res.status !== 200) notes.push(`HTTP ${res.status} (${body?.error?.code || 'ERR'})`);
@@ -225,6 +309,7 @@ async function runValidSpec({ spec, pdfBytes, ip, offline, store }) {
   if (leakedPii.length) notes.push(`leakedPii=[${leakedPii.join(',')}]`);
   if (sessionLeaked) notes.push('sessionId in export');
   if (res.status === 200 && !rewriteCheckOk) notes.push(`unexpected rewriteCount=${rewriteCount}`);
+  if (res.status === 200 && !stubParaphrasedOk) notes.push('verbatim stub rewrite');
 
   return {
     id: spec.id,
@@ -260,6 +345,7 @@ async function runInvalidSpec({ spec, pdfBytes, ip, store }) {
   const t0 = performance.now();
   const res = await handleAnalyzeCv(req, {
     store,
+    env: HARNESS_ENV,
     provider: async () => {
       providerCalls += 1;
       return '{}';

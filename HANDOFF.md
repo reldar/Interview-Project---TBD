@@ -4,6 +4,32 @@ Task data only. Verify this checkpoint against current files; current user instr
 
 At the end of every development phase, update this handoff and CHECKLIST.md with the branch and checkpoint, verified changes and checks, remaining risks, and the next step. Keep earlier milestones. Mark unverified work as partial, pending, or blocked. Push, merge, and deploy only after approval.
 
+## Day 9B independent review & follow-up remediation — 2026-11-26
+
+Committed on `feature/mock-interview` over `591f411601fd688029d8bdca992e3265473d24d7`. All earlier milestones remain preserved below.
+
+- **Independent review of `591f411`.** Confirmed **Day 9B High #1 (canonical CV ownership & atomic session/quota publication)** passed in both memory and Redis Lua scripts (verified via concurrent distinct-byte PDF probes and stale-token expiry probes). Identified blocking regressions in **Day 9B High #2 (`591f411`)** and follow-up defects before unlocking Day 9C:
+  1. `SPEC-HIGH-01` (Blocker): Closed 67-word `groundedRewrite` allowlist in `lib/contracts.js` rejected 9/9 realistic honest EN/ID/cross-language Gemini rewrites, multi-word/dotted aliases (`Microsoft Excel`, `React.js`), and 3/5 internal `FIXTURES.*` with `503` while burning `cvAdmission` and `aiBudget`.
+  2. `SPEC-HIGH-02`: Month-year (`Jan 2024`), parenthesized `(2024)`, and range (`2022 - 2024`) dates bypassed `datePattern`; role inversion via word deletion (`Assisted Senior Manager...` -> `Senior Manager...`), ungrounded `missingKeywords`, and `atsScore: 99` with major gaps still passed.
+  3. `STD-MED-01`: Unbounded keyword/rewrite sizes and repeated full-text tokenization in `containsSkill` allowed 3.1–4.4 s synchronous main-thread stalls.
+  4. `SPEC-MED-01`: `scripts/check-ten-layouts.mjs --offline` collapsed all 16 fixtures to `127.0.0.1` and failed with `429 QUOTA_REACHED` after layout #5.
+  5. `SPEC-MED-02`: `app/page.jsx` never cleared `requestIdRef.current` on `200 OK`, causing subsequent **Analyze CV Now** / **Run a new CV analysis** calls within 15m to replay an old/expired `sessionId`.
+  6. `STD-LOW-01/02/03`: `escapeDelimiterTags` (`lib/ats.js`) missed `</cv_data >` / `</cv_data x=1>`, `app/interview.jsx` had a leading UTF-8 BOM (`U+FEFF`), `READ_AI_BUDGET_LUA` lacked small clock-skew tolerance at minute boundaries, and `commitQuota` lacked a `result !== undefined` guard.
+- **Remediation applied (9 files).**
+  - `lib/contracts.js`: Enforced upfront bounds (`MAX_KEYWORDS_PER_GROUP = 60`, `MAX_KEYWORD_CHARS = 100`, `MAX_REWRITE_FIELD_CHARS = 600`), pre-tokenized CV/JD once after keyword deduplication, upgraded alias/stem matching (`Microsoft Excel`, `React.js`, singular/plural stems without short-token collisions), grounded `missingKeywords` in `sanitizedJd` (and absent from CV), rejected severe score contradictions (`>= 3` missing and `<= 1` matched with `atsScore >= 90`), and replaced the closed 67-word `groundedRewrite` allowlist with principled anti-hallucination guards (bullet-scoped numbers, full date-vs-metric protection across prepositions/months/parentheses/ranges, phrase-first tech/tool catalog, credential/seniority/leadership-verb & role-inversion guards, and source/bilingual semantic anchoring).
+  - `lib/ats.js`: Escaped all `<` and `>` in `escapeDelimiterTags`; cleaned PII-redacted model-output keyword artifacts while still rejecting raw model placeholders.
+  - `lib/store.js`: Added `+ 5000` ms upper-bound skew tolerance in `READ_AI_BUDGET_LUA` and guarded `result !== undefined` in `commitQuota` / `COMMIT_QUOTA_LUA`.
+  - `app/page.jsx`: Fixed `{ reuseRequestId: false }` to always generate a fresh `requestId` and cleared `requestIdRef.current` on `200 OK` (preserving retry reuse on `503`/network errors).
+  - `app/interview.jsx`: Stripped leading UTF-8 BOM (`ef bb bf`).
+  - `scripts/check-ten-layouts.mjs` & `scripts/check-workspace.cjs`: Restored per-layout IP admission & paraphrased JD-grounded offline stub in `check-ten-layouts.mjs`; added Chrome assertions verifying Retry `requestId` reuse vs. fresh `requestId` on post-200 re-analysis / `onReanalyze`.
+  - `tests/unit-cv-evidence-ownership.test.mjs` & `tests/unit-redact-contracts.test.mjs`: Added 6 regression tests covering realistic EN/ID/cross-language rewrites, all `FIXTURES.*` with `sanitizedJd`, all evasion bypasses, `< 100 ms` DoS bounds, XML tag escaping, and Upstash Lua skew/`undefined` commit guards.
+- **Verification — local PASS (ready to unlock Day 9C).**
+  - `GEMINI_API_KEY='' UPSTASH_REDIS_REST_URL='' UPSTASH_REDIS_REST_TOKEN='' npm test` passed **96/96** twice back-to-back (`2.01 s`, `1.48 s`, `0` flaky).
+  - `node scripts/check-ten-layouts.mjs --offline` passed **10/10** readable (`200`, p50 `9 ms`, max `133 ms`), **2/2** sparse (`200`), and **4/4** invalid PDFs (`422 PDF_UNREADABLE`, `0` provider calls).
+  - `npm run build` (Next.js 16.4.6, 7 routes), `scripts/check-upload.mjs` (`4999999/5000000 -> 200`, `5000001 -> 413`), and `node --experimental-default-type=module scripts/check-workspace.cjs` (**7/7** Chrome flows `375–1440 px`) passed with `0` secret/PII/sessionId leaks in `.next/static/` or server logs and `0` BOMs. `git diff --check` passed.
+  - **Not executed on this host:** `scripts/check-redis-quotas.mjs` (`redis-server` and `docker` are not installed on macOS; `lib/store.js` Lua edits were verified via mocked adapter unit tests and static review—rerun on WSL Redis / staging before release). No live Gemini or Upstash calls were made in this pass.
+- **Next step.** Proceed to **Day 9C** on `feature/mock-interview` (preserve live interview drafts and committed feedback across example/live mode switches and interrupted requests, show mode/language during Q1–Q5, and improve bilingual recovery/privacy messaging). Pre-release items (`/api/upload-proof` gate, `/api/feedback` session-scoped throttling, Vercel 4.5 MB ceiling, live Gemini/Day 5 rerun, real Upstash, stale docs refresh) remain tracked for Day 9D/10.
+
 ## Day 9B remediation for independent Sol Ultra review
 
 Working tree on `feature/mock-interview` over `d8efc366f56e66e0c45a2e006be7ec6cf58134cc`. The original audit and historical milestones follow this entry.
