@@ -172,7 +172,12 @@ async function blockUnexpectedApis(page) {
       await page.route('**/api/interview/answer', async (route) => {
         const body = route.request().postDataJSON();
         answers.push(body);
-        if (answers.length === 1) return route.fulfill({ status: 503, json: { error: { code: 'TEMPORARILY_UNAVAILABLE' } } });
+        if (answers.length === 1) return width === 375 || width === 768
+          ? route.fulfill({
+            status: 429,
+            json: { error: { code: 'QUOTA_REACHED', action: 'interviewGeneration', resetAt: '2026-11-26T17:00:00Z' } },
+          })
+          : route.fulfill({ status: 503, json: { error: { code: 'TEMPORARILY_UNAVAILABLE' } } });
         if (answers.length === 2) await heldAnswer;
         if (width === 375 && body.questionNumber === 2) {
           committed.push({
@@ -274,7 +279,12 @@ async function blockUnexpectedApis(page) {
       await panel.getByRole('alert').waitFor();
       assert.equal(await draft.inputValue(), 'First answer draft');
       const retry = panel.getByRole('button', { name: en ? 'Retry' : 'Coba lagi' });
-      await retry.click();
+      if (width === 375 || width === 768) {
+        assert.match(await panel.getByRole('alert').innerText(), en ? /Interview processing limit/ : /Batas pemrosesan wawancara/);
+        await submitAnswer.click();
+      } else {
+        await retry.click();
+      }
       await panel.getByRole('status').filter({ hasText: en ? 'Evaluating your answer' : 'Menilai jawaban' }).waitFor();
       assert.equal(await draft.isDisabled(), true);
       await panel.locator('form').dispatchEvent('submit', { bubbles: true, cancelable: true });

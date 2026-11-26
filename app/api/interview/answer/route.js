@@ -5,11 +5,11 @@ import {
   isInterviewQuestion,
   validateInterviewAnswerRequest,
 } from '../../../../lib/contracts.js';
-import { generateInterviewFeedback, getCompletedInterviewReport } from '../../../../lib/interview.js';
+import { generateInterviewFeedback, getCompletedInterviewReport, withInterviewGeneration } from '../../../../lib/interview.js';
 import { buildInterviewSummary, isInterviewSummary } from '../../../../lib/interview-report.js';
 import { logRouteEvent } from '../../../../lib/logger.js';
 import { redactPii } from '../../../../lib/redact.js';
-import { getStore } from '../../../../lib/store.js';
+import { deriveIpHash, getStore } from '../../../../lib/store.js';
 
 export const runtime = 'nodejs';
 const ROUTE = '/api/interview/answer';
@@ -73,33 +73,31 @@ export async function handleInterviewAnswer(request, deps = {}) {
     if (interview.completed || interview.currentQuestion !== questionNumber) throw conflict(interview);
     if (records.length !== questionNumber - 1) throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
 
-    const feedback = await generateInterviewFeedback({
-      mode: interview.mode,
-      language: interview.language,
-      question: questionAt(interview, questionNumber),
-      sanitizedJd: session.sanitizedJd,
-      userAnswer: sanitizedAnswer,
-    }, deps.provider);
-    const record = { questionNumber, userAnswer: sanitizedAnswer, feedback };
-    const completed = questionNumber === INTERVIEW_QUESTION_COUNT;
-    const nextInterview = {
-      ...interview,
-      answers: [...records, record],
-      currentQuestion: completed ? null : questionNumber + 1,
-      completed,
-    };
-    if (completed) {
-      nextInterview.finalSummary = buildInterviewSummary(nextInterview.answers, interview.language);
-      if (!isInterviewSummary(nextInterview.finalSummary)) throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
-    }
-    const result = answerResult(nextInterview, record);
-    const updated = await store.updateSession(sessionId, session.version, { interview: nextInterview });
-    if (updated.ok) return respond(result, 200, 'OK');
-    if (updated.code === ERROR_CODES.SESSION_EXPIRED) throw new AppError(ERROR_CODES.SESSION_EXPIRED);
-    if (updated.code !== ERROR_CODES.QUESTION_CONFLICT || !updated.session) {
-      throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
-    }
-    const latest = updated.session.interview;
+    const ipHash = deriveIpHash(request, deps.ipSecret);
+    const outcome = await withInterviewGeneration(store, { session, ipHash, questionNumber }, async () => {
+      const feedback = await generateInterviewFeedback({
+        mode: interview.mode,
+        language: interview.language,
+        question: questionAt(interview, questionNumber),
+        sanitizedJd: session.sanitizedJd,
+        userAnswer: sanitizedAnswer,
+      }, deps.provider);
+      const record = { questionNumber, userAnswer: sanitizedAnswer, feedback };
+      const completed = questionNumber === INTERVIEW_QUESTION_COUNT;
+      const nextInterview = {
+        ...interview,
+        answers: [...records, record],
+        currentQuestion: completed ? null : questionNumber + 1,
+        completed,
+      };
+      if (completed) {
+        nextInterview.finalSummary = buildInterviewSummary(nextInterview.answers, interview.language);
+        if (!isInterviewSummary(nextInterview.finalSummary)) throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
+      }
+      return { interview: nextInterview, response: answerResult(nextInterview, record) };
+    });
+    if (outcome.response) return respond(outcome.response, 200, 'OK');
+    const latest = outcome.session?.interview;
     const winner = latest?.answers?.[questionNumber - 1];
     if (winner?.userAnswer === sanitizedAnswer) {
       return respond(answerResult(latest, winner), 200, 'OK');
@@ -109,6 +107,10 @@ export async function handleInterviewAnswer(request, deps = {}) {
     const appError = err instanceof AppError ? err : new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
     const error = { code: appError.code };
     if (appError.code === ERROR_CODES.INVALID_INPUT) error.field = appError.meta.field;
+    if (appError.code === ERROR_CODES.QUOTA_REACHED) {
+      error.action = appError.meta.action;
+      error.resetAt = appError.meta.resetAt;
+    }
     if (appError.code === ERROR_CODES.QUESTION_CONFLICT) {
       error.currentQuestion = appError.meta.currentQuestion ?? null;
       error.completed = appError.meta.completed === true;

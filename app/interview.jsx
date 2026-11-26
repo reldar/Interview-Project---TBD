@@ -20,7 +20,11 @@ const unavailable = { code: ERROR_CODES.TEMPORARILY_UNAVAILABLE };
 function getInterviewError(status, data) {
   if (status === 410) return { code: ERROR_CODES.SESSION_EXPIRED };
   if (status === 429) {
-    return { code: ERROR_CODES.QUOTA_REACHED, action: 'interviewStart', resetAt: data?.error?.resetAt };
+    return {
+      code: ERROR_CODES.QUOTA_REACHED,
+      action: data?.error?.action === 'interviewGeneration' ? 'interviewGeneration' : 'interviewStart',
+      resetAt: data?.error?.resetAt,
+    };
   }
   if (status === 400) return { code: ERROR_CODES.INVALID_INPUT, field: data?.error?.field };
   return unavailable;

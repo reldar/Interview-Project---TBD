@@ -5,6 +5,7 @@ import { validateInterviewStartRequest } from '../lib/contracts.js';
 import {
   buildInterviewPrompt,
   generateInterviewQuestions,
+  MAX_INTERVIEW_PROVIDER_ATTEMPTS,
   validateInterviewQuestions,
 } from '../lib/interview.js';
 import { INTERVIEW_FIXTURES } from '../lib/interview-fixtures.js';
@@ -86,4 +87,22 @@ test('interview uses the existing Gemini transport with its own schema and keeps
   await provider.generateAtsAnalysis({ systemInstruction: 'ATS', userPrompt: 'fixture' });
   assert.ok(bodies[0].generationConfig.responseSchema.properties.questions);
   assert.ok(bodies[1].generationConfig.responseSchema.properties.atsScore);
+});
+
+test('interview transport caps upstream attempts even when all fallback models fail fast', async () => {
+  let calls = 0;
+  const provider = createGeminiProvider({
+    apiKey: 'test-only-key',
+    models: ['stub-a', 'stub-b', 'stub-c', 'stub-d'],
+    maxAttempts: MAX_INTERVIEW_PROVIDER_ATTEMPTS,
+    retryDelayMs: 0,
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(null, { status: 503 });
+    },
+  });
+  await assert.rejects(generateInterviewQuestions({
+    ...INTERVIEW_FIXTURES, mode: 'hrd', language: 'en',
+  }, provider), { code: 'TEMPORARILY_UNAVAILABLE' });
+  assert.equal(calls, MAX_INTERVIEW_PROVIDER_ATTEMPTS);
 });

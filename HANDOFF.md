@@ -2,6 +2,18 @@
 
 Task data only. Verify this checkpoint against current files; current user instructions take precedence.
 
+At the end of every development phase, update this handoff and CHECKLIST.md with the branch and checkpoint, verified changes and checks, remaining risks, and the next step. Keep earlier milestones. Mark unverified work as partial, pending, or blocked. Push, merge, and deploy only after approval.
+
+## Day 9A checkpoint — 2026-11-25
+
+- **Branch and checkpoint.** `feature/mock-interview` at `4ad895f4a018d5f09b70abc6b0932352803e2dfd`, the credential-scanned local Days 6–8 commit. Day 9A changes are uncommitted for review.
+- **Completed and verified offline.** Start and answer acquire a token-fenced 25-second lease before provider work. Start reserves one of the three daily success slots across sessions with the same quota identity. Commit checks ownership and session version, retains the original expiry, and converts the hold into a charge only on a successful start. Failed work releases its hold, while abandonment expires the lease and restores capacity. Concurrent requests receive a retryable response without starting new provider work under a valid lease. Previously committed results can still be replayed.
+- **Attempt limits.** A generation claim counts against 24 claims per IP per Jakarta day and three per session step per two-minute window, including failed and abandoned claims. An interview generation can make at most three upstream HTTP attempts. Concurrent requests rejected before claiming ownership do not consume an attempt. The dashboard distinguishes the processing limit from the interview-start quota in both languages.
+- **Verification.** `npm test` passed 72/72 (67 baseline cases plus five). Tests count stub calls for competing starts and answers, shared quota contention, retry, provider failure, stale release/commit, session expiry and attempt reset. `npm run build` and `git diff --check` passed. Seven stubbed Chrome flows passed at 375–1440 px, including all four interview configurations and bilingual processing-limit copy with draft retention. Redis command and lost-response behavior were stubbed. Redis Lua was not exercised against a running server.
+- **Remaining risks.** A request already sent upstream may continue after a timeout or expired lease. A replacement can generate again, but the old worker cannot commit or release the replacement's lease. IP rotation, distributed traffic, and requests rejected before provider execution still need trusted-ingress, abuse, and budget controls. The Day 5 live layout rerun, live Gemini and Upstash verification, and Day 9B–9D remain pending.
+- **CV analysis review.** The CV route reserves a successful-analysis slot before generation. Its cache only deduplicates completed requests, so concurrent identical submissions can each reserve and generate. Failures release quota without a separate attempt limit. PDF extraction also precedes quota admission. The CV route was left unchanged by Day 9A.
+- **Next.** Review Day 9A, then verify its lease, reservation, and expiry logic with an actual disposable Redis instance. Plan production ingress and configuration guards and extend ownership and attempt limits to CV analysis before production approval.
+
 ## Day 8 checkpoint — 2026-11-25
 
 - Q5 commits the accepted answer, feedback, completion and final summary in one versioned write at the existing session expiry. Q5 retries replay the winning summary and ordered sanitized transcript. Completed sessions can reopen the report while the analysis session is still active.

@@ -1,5 +1,7 @@
 # LatihKerja MVP delivery checklist
 
+At the end of each development phase, update this checklist and HANDOFF.md with verified results, branch and checkpoint, outstanding risks, and the next action. Keep prior milestones and mark incomplete or unverified checks explicitly. Push, merge, and deploy only after approval.
+
 Source: [guideline.md](guideline.md), sections 1–12. The project folder contained the guideline only at intake. All boxes represent future work. A owns backend and AI, B owns frontend and UX, and both own the deployed walkthrough. “Proposed” identifies working defaults or review suggestions that still need team agreement.
 
 ## Day 1 · Prove the upload path and agree on contracts (§§1–5, 12)
@@ -37,7 +39,9 @@ Source: [guideline.md](guideline.md), sections 1–12. The project folder contai
 
 ## Days 9–10 · Verify the deployed build (§§5, 8–12)
 
-- [ ] **Pre-deployment · A** — Deduplicate in-flight AI generation across server instances for concurrent starts of a session and concurrent answers to a question. Versioned commits already prevent duplicate state changes or start quota charges. Verify recovery after generation failure, worker loss, and session expiry.
+- [x] **Day 9A · Local implementation and verification** — Acquire fenced ownership before interview generation, reserve start quota, and bound failed attempts. Verified one provider invocation under supported concurrency, replay, shared quota contention, lease expiry and stale-worker protection. **72 tests, seven stubbed Chrome flows and the production build passed.** Day 9A remains uncommitted on `feature/mock-interview` over the local Days 6–8 checkpoint `4ad895f`.
+- [ ] **Day 9A · Production parity pending** — Execute the Redis Lua paths against a disposable Redis instance and verify multi-worker contention, lease loss and quota reset. A timed-out call may continue upstream after lease expiry even though its worker cannot commit. No live Gemini or Upstash verification was performed.
+- [ ] **Pre-deployment · A** — Extend in-flight deduplication and failed-attempt limits to CV analysis. Enforce trusted ingress, required production configuration, and service-wide cost controls. Day 9B–9D are pending.
 
 - [ ] **Day 9 · A** — Configure Upstash Redis session expiry within 1–2 hours (proposed fixed 90 minutes from analysis). Isolate two sessions, preserve expiry on updates and verify that a late model result cannot recreate an expired session.
 - [ ] **Day 9 · A** — Enforce independent daily caps of five analyses and three interview starts per IP. Proposed design uses trusted deployment metadata, keyed digests, atomic reservations, release on failure, logical retry IDs and Jakarta calendar-day reset. Exercise concurrency at the last slot, retry after response loss, duplicate active start and daily reset. Answers remain available after the start cap. Session expiry cannot replenish either allowance.

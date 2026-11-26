@@ -4,7 +4,10 @@ import { handleInterviewAnswer } from '../app/api/interview/answer/route.js';
 import { handleInterviewStart } from '../app/api/interview/start/route.js';
 import { INTERVIEW_FIXTURES } from '../lib/interview-fixtures.js';
 import { logRouteEvent } from '../lib/logger.js';
-import { createMemoryStore, createUpstashStore } from '../lib/store.js';
+import {
+  createMemoryStore, createUpstashStore, INTERVIEW_GENERATION_LEASE_MS, INTERVIEW_ATTEMPT_WINDOW_MS,
+  MAX_INTERVIEW_ATTEMPTS_PER_STEP,
+} from '../lib/store.js';
 
 const feedback = {
   clarityScore: 4, relevanceScore: 5, impactScore: 3, suggestion: 'Explain how you measured the result.',
@@ -116,7 +119,6 @@ test('rejects invalid inputs and skipped questions before scoring', async () => 
 });
 
 test('invalid rubric output and provider errors leave the current answer available for retry', async () => {
-  const { store, sessionId, answer } = await setup();
   for (const provider of [
     stub({ ...feedback, clarityScore: 0 }),
     stub({ ...feedback, relevanceScore: '4' }),
@@ -125,12 +127,13 @@ test('invalid rubric output and provider errors leave the current answer availab
     { generateStructuredResponse: () => '{malformed' },
     { generateStructuredResponse() { throw new Error('private provider details'); } },
   ]) {
+    const { store, sessionId, answer } = await setup();
     const response = await answer(1, 'Keep me', provider);
     assert.equal(response.status, 503);
     assert.deepEqual(await response.json(), { error: { code: 'TEMPORARILY_UNAVAILABLE' } });
     assert.equal((await store.getSession(sessionId)).interview.currentQuestion, 1);
+    assert.equal((await answer(1, 'Keep me')).status, 200);
   }
-  assert.equal((await answer(1, 'Keep me')).status, 200);
 });
 
 for (const duplicate of [true, false]) {
@@ -140,18 +143,23 @@ for (const duplicate of [true, false]) {
     let release;
     const startedScoring = new Promise((resolve) => { started = resolve; });
     const held = new Promise((resolve) => { release = resolve; });
-    const slow = answer(1, duplicate ? 'Winning answer' : 'Losing answer', {
-      generateStructuredResponse() { started(); return held; },
+    let calls = 0;
+    const slow = answer(1, 'Winning answer', {
+      generateStructuredResponse() { calls += 1; started(); return held; },
     });
     await startedScoring;
-    const winner = await answer(1, 'Winning answer');
+    const competing = duplicate ? 'Winning answer' : 'Losing answer';
+    const provider = { generateStructuredResponse() { calls += 1; return JSON.stringify(feedback); } };
+    assert.equal((await answer(1, competing, provider)).status, 503);
+    release(JSON.stringify(feedback));
+    const winner = await slow;
     assert.equal(winner.status, 200);
-    release(JSON.stringify({ ...feedback, clarityScore: 1 }));
-    const loser = await slow;
+    const loser = await answer(1, competing, provider);
     assert.equal(loser.status, duplicate ? 200 : 409);
     const body = await loser.json();
     if (duplicate) assert.deepEqual(body, await winner.json());
     else assert.equal(body.error.currentQuestion.questionNumber, 2);
+    assert.equal(calls, 1);
     const { interview } = await store.getSession(sessionId);
     assert.equal(interview.answers.length, 1);
     assert.equal(interview.answers[0].feedback.clarityScore, 4);
@@ -196,15 +204,19 @@ test('concurrent Q5 retries return the winning summary and transcript with one f
   let release;
   const started = new Promise((resolve) => { entered = resolve; });
   const scored = new Promise((resolve) => { release = resolve; });
+  let calls = 0;
   const slow = answer(5, 'Same answer', {
-    generateStructuredResponse() { entered(); return scored; },
+    generateStructuredResponse() { calls += 1; entered(); return scored; },
   });
   await started;
-  const winner = await answer(5, 'Same answer', stub({ ...feedback, impactScore: 1 }));
+  const duplicate = { generateStructuredResponse() { calls += 1; return JSON.stringify(feedback); } };
+  assert.equal((await answer(5, 'Same answer', duplicate)).status, 503);
+  release(JSON.stringify({ ...feedback, impactScore: 1 }));
+  const winner = await slow;
   assert.equal(winner.status, 200);
   const committed = await winner.json();
-  release(JSON.stringify({ ...feedback, impactScore: 5 }));
-  assert.deepEqual(await (await slow).json(), committed);
+  assert.deepEqual(await (await answer(5, 'Same answer', duplicate)).json(), committed);
+  assert.equal(calls, 1);
   assert.equal(committed.finalSummary.averageScores.impact, 2.6);
   const after = await store.getSession(sessionId);
   assert.equal(after.version, before.version + 1);
@@ -251,22 +263,34 @@ test('Upstash adapter sends the original deadline and a TTL-preserving CAS for a
   const { store, sessionId } = await setup();
   const session = await store.getSession(sessionId);
   let writes = 0;
+  let owner;
   const redis = createUpstashStore({
     url: 'https://redis.invalid',
     token: 'test-only-token',
     fetchImpl: async (_url, options) => {
-      const [command, script, count, key, version, next, deadline] = JSON.parse(options.body);
+      const [command, script, count, key, ownerKey, , , , stepKey,
+        operation, token, version, deadline, start, , , , , , , next] = JSON.parse(options.body);
       if (command === 'GET') return Response.json({ result: JSON.stringify(session) });
       assert.equal(command, 'EVAL');
       assert.match(script, /KEEPTTL/);
       assert.match(script, /redis.call\('TIME'\)/);
-      assert.equal(count, 1);
+      assert.equal(count, 6);
       assert.equal(key, `sess:${sessionId}`);
+      assert.equal(ownerKey, `interview:owner:${sessionId}`);
+      assert.equal(stepKey, `interview:step-attempts:${sessionId}:1`);
+      assert.equal(start, '0');
       assert.equal(version, String(session.version));
       assert.equal(deadline, String(Date.parse(session.expiresAt)));
+      if (operation === 'claim') {
+        owner = token;
+        return Response.json({ result: ['claimed', String(Date.now() + INTERVIEW_GENERATION_LEASE_MS)] });
+      }
+      assert.equal(token, owner);
+      if (operation === 'release') return Response.json({ result: ['released'] });
+      assert.equal(operation, 'finish');
       assert.equal(JSON.parse(next).expiresAt, session.expiresAt);
       writes += 1;
-      return Response.json({ result: ['ERR', 'SESSION_EXPIRED'] });
+      return Response.json({ result: ['expired'] });
     },
   });
   const response = await handleInterviewAnswer(request('answer', { sessionId, questionNumber: 1, userAnswer: 'Example' }), {
@@ -274,4 +298,54 @@ test('Upstash adapter sends the original deadline and a TTL-preserving CAS for a
   });
   assert.equal(response.status, 410);
   assert.equal(writes, 1);
+});
+
+test('an expired answer worker cannot commit or release the replacement worker’s lease', async () => {
+  let now = Date.parse('2026-11-25T08:00:00Z');
+  const { store, sessionId, answer } = await setup({ store: createMemoryStore({ now: () => now }) });
+  function deferred() {
+    let entered;
+    let release;
+    const started = new Promise((resolve) => { entered = resolve; });
+    const held = new Promise((resolve) => { release = resolve; });
+    const provider = { generateStructuredResponse() { entered(); return held; } };
+    return { started, provider, release };
+  }
+  const old = deferred();
+  const pendingOld = answer(1, 'Same answer', old.provider);
+  await old.started;
+  now += INTERVIEW_GENERATION_LEASE_MS;
+  const replacement = deferred();
+  const pendingNew = answer(1, 'Same answer', replacement.provider);
+  await replacement.started;
+  old.release(JSON.stringify({ ...feedback, clarityScore: 1 }));
+  assert.equal((await pendingOld).status, 503);
+  let extraCalls = 0;
+  const third = { generateStructuredResponse() { extraCalls += 1; return JSON.stringify(feedback); } };
+  assert.equal((await answer(1, 'Same answer', third)).status, 503);
+  assert.equal(extraCalls, 0);
+  replacement.release(JSON.stringify(feedback));
+  const winner = await pendingNew;
+  assert.equal(winner.status, 200);
+  assert.equal((await winner.json()).feedback.clarityScore, 4);
+  assert.equal((await store.getSession(sessionId)).interview.answers.length, 1);
+});
+
+test('repeated answer failures reach the step budget without losing earlier results', async () => {
+  let now = Date.parse('2026-11-25T08:00:00Z');
+  const { answer } = await setup({ store: createMemoryStore({ now: () => now }) });
+  const previous = await answer(1);
+  const committed = await previous.json();
+  let calls = 0;
+  const failing = { generateStructuredResponse() { calls += 1; throw new Error('provider fail'); } };
+  for (let i = 0; i < MAX_INTERVIEW_ATTEMPTS_PER_STEP; i += 1) {
+    assert.equal((await answer(2, 'Draft', failing)).status, 503);
+  }
+  const blocked = await answer(2, 'New draft', failing);
+  assert.equal(blocked.status, 429);
+  assert.equal((await blocked.json()).error.action, 'interviewGeneration');
+  assert.deepEqual(await (await answer(1, 'I wrote instructions.', failing)).json(), committed);
+  assert.equal(calls, MAX_INTERVIEW_ATTEMPTS_PER_STEP);
+  now += INTERVIEW_ATTEMPT_WINDOW_MS;
+  assert.equal((await answer(2, 'Draft')).status, 200);
 });

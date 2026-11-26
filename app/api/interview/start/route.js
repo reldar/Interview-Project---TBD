@@ -1,29 +1,12 @@
 import { AppError, ERROR_CODES, isInterviewQuestion, validateInterviewStartRequest } from '../../../../lib/contracts.js';
-import { generateInterviewQuestions, getCompletedInterviewReport } from '../../../../lib/interview.js';
+import { generateInterviewQuestions, getCompletedInterviewReport, withInterviewGeneration } from '../../../../lib/interview.js';
 import { logRouteEvent } from '../../../../lib/logger.js';
 import { deriveIpHash, getStore } from '../../../../lib/store.js';
 
 export const runtime = 'nodejs';
 
 const ROUTE = '/api/interview/start';
-const ACTION = 'interviewStart';
 const HEADERS = { 'cache-control': 'no-store' };
-
-function requireAvailable(result) {
-  switch (result.status) {
-    case 'ready':
-    case 'active':
-      return result;
-    case 'expired':
-      throw new AppError(ERROR_CODES.SESSION_EXPIRED);
-    case 'limited':
-      throw new AppError(ERROR_CODES.QUOTA_REACHED, { action: ACTION, resetAt: result.resetAt });
-    case 'conflict':
-      throw new AppError(ERROR_CODES.QUESTION_CONFLICT);
-    default:
-      throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
-  }
-}
 
 export async function handleInterviewStart(request, deps = {}) {
   const log = deps.logger ?? logRouteEvent;
@@ -32,31 +15,30 @@ export async function handleInterviewStart(request, deps = {}) {
     const body = await request.json().catch(() => null);
     const { sessionId, mode, language } = validateInterviewStartRequest(body);
     const store = deps.store ?? getStore();
-    const ipHash = deriveIpHash(request, deps.ipSecret);
-    let result = requireAvailable(await store.startInterview({ sessionId, ipHash }));
-
-    if (result.status === 'ready') {
-      const { session } = result;
-      const questions = await generateInterviewQuestions({
-        mode,
-        language,
-        sanitizedCvText: session.sanitizedCvText,
-        sanitizedJd: session.sanitizedJd,
-      }, deps.provider);
-      result = requireAvailable(await store.startInterview({
-        sessionId,
-        ipHash,
-        session,
-        interview: { mode, language, currentQuestion: 1, questions },
-      }));
+    const session = await store.getSession(sessionId);
+    if (!session) throw new AppError(ERROR_CODES.SESSION_EXPIRED);
+    let interview = session.interview;
+    if (!interview) {
+      const ipHash = deriveIpHash(request, deps.ipSecret);
+      const result = await withInterviewGeneration(store, { session, ipHash }, async () => {
+        const questions = await generateInterviewQuestions({
+          mode,
+          language,
+          sanitizedCvText: session.sanitizedCvText,
+          sanitizedJd: session.sanitizedJd,
+        }, deps.provider);
+        return { interview: { mode, language, currentQuestion: 1, questions } };
+      });
+      interview = result.interview ?? result.session?.interview;
+      if (!interview) throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
     }
 
-    const { currentQuestion, questions, completed, language: interviewLanguage } = result.interview;
+    const { currentQuestion, questions, completed, language: interviewLanguage } = interview;
     if (completed) {
       throw new AppError(ERROR_CODES.QUESTION_CONFLICT, {
         completed,
         language: interviewLanguage,
-        report: getCompletedInterviewReport(result.interview),
+        report: getCompletedInterviewReport(interview),
       });
     }
     const question = questions[currentQuestion - 1];
@@ -77,7 +59,7 @@ export async function handleInterviewStart(request, deps = {}) {
       error.report = appError.meta.report;
     }
     if (error.code === ERROR_CODES.QUOTA_REACHED) {
-      error.action = ACTION;
+      error.action = appError.meta.action;
       error.resetAt = appError.meta.resetAt;
     }
     log({ route: ROUTE, status: appError.status, code: appError.code, elapsedMs: Date.now() - startedAt });
