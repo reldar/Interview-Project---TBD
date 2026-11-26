@@ -387,7 +387,6 @@ export default function Workspace() {
   const [drag, setDrag] = useState(false);
   const [mode, setMode] = useState(null);
   const [realAnalysis, setRealAnalysis] = useState(null);
-  const [previewInterview, setPreviewInterview] = useState(false);
   const [stage, setStage] = useState(0);
   const [focusSeq, setFocusSeq] = useState(0);
 
@@ -597,7 +596,6 @@ export default function Workspace() {
         language: submitLang,
       });
       setMode('real');
-      setPreviewInterview(false);
       setStage(1);
       setFocusSeq((seq) => seq + 1);
     } catch {
@@ -619,7 +617,6 @@ export default function Workspace() {
 
   function handleOpenExample() {
     setMode('example');
-    setPreviewInterview(false);
     setStage(1);
     setFocusSeq((seq) => seq + 1);
   }
@@ -627,7 +624,6 @@ export default function Workspace() {
   function handleBackToReal() {
     if (!realAnalysis) return;
     setMode('real');
-    setPreviewInterview(false);
     setStage(1);
     setFocusSeq((seq) => seq + 1);
   }
@@ -871,37 +867,14 @@ export default function Workspace() {
                   filename={`LatihKerja-review-${lang}.txt`}
                 />
 
-                <section className="interviewBridge" aria-labelledby="interview-bridge-heading">
-                  <h2 id="interview-bridge-heading">
-                    {t('Latihan wawancara', 'Interview practice')}
-                  </h2>
-                  <p>
-                    {t(
-                      'Simulasi wawancara khusus berdasarkan CV yang kamu unggah akan hadir pada tahap berikutnya (Hari 6–8). Kamu tetap bisa mencoba pratinjau wawancara contoh tanpa menghapus hasil analisis CV di atas.',
-                      'Mock interview practice tailored to your uploaded CV arrives in Days 6–8. Meanwhile, you can try the 5-step example interview preview without discarding your CV analysis above.'
-                    )}
-                  </p>
-                  <div className="actions">
-                    <Button
-                      variant={previewInterview ? 'outline' : 'default'}
-                      onClick={() => {
-                        setPreviewInterview((open) => {
-                          const next = !open;
-                          if (!next) setStage(1);
-                          return next;
-                        });
-                      }}
-                    >
-                      {previewInterview
-                        ? t('Tutup pratinjau wawancara contoh', 'Hide example interview preview')
-                        : t('Coba pratinjau wawancara contoh', 'Preview example interview')}
-                    </Button>
-                  </div>
-                </section>
-
-                {previewInterview && (
-                  <Interview en={en} report={exampleReportText} onStage={setStage} />
-                )}
+                <Interview
+                  key={realAnalysis.sessionId}
+                  lang={lang}
+                  sessionId={realAnalysis.sessionId}
+                  onStage={setStage}
+                  onReanalyze={() => submitAnalysis()}
+                  analyzing={busy}
+                />
               </>
             )}
 
@@ -919,7 +892,7 @@ export default function Workspace() {
                   filename={`LatihKerja-${en ? 'example' : 'contoh'}.txt`}
                   onBackToReal={realAnalysis ? handleBackToReal : null}
                 />
-                <Interview en={en} report={exampleReportText} onStage={setStage} />
+                <Interview key="example" lang={lang} onStage={setStage} />
               </>
             )}
           </div>

@@ -2,6 +2,41 @@
 
 Task data only. Verify this checkpoint against current files; current user instructions take precedence.
 
+## Day 8 checkpoint — 2026-11-25
+
+- Q5 commits the accepted answer, feedback, completion and final summary in one versioned write at the existing session expiry. Q5 retries replay the winning summary and ordered sanitized transcript. Completed sessions can reopen the report while the analysis session is still active.
+- The summary uses the five validated records. It averages each dimension, identifies highest-rated dimensions with averages of at least 3, and reuses the committed tip from the lowest-rated answer in the weakest dimension. Ties resolve in rubric and question order. There is no summary model call.
+- All 67 Node tests passed, preserving the prior 61 test cases (with Q5 assertions updated for the report contract). Six new cases cover averages, ties, export field selection, incomplete records, concurrent Q5 retries and expiry during Q5.
+- The Next.js production build passed. Seven stubbed Chrome flows passed, including all four interview configurations at 375–1440 px, two CV regression flows and the offline example. Verified Q5 feedback before the report, the five ordered records, localized averages, byte-decoded UTF-8 downloads matching clipboard text, copy fallback, long multiline answers, masking and no horizontal overflow. The interview download contains the report and accepted sanitized transcript. The CV review retains its separate download.
+- The Day 5 live layout rerun and distributed deduplication of concurrent AI calls remain open. Keep both on the pre-deployment plan. Live Gemini scoring and Upstash behavior are still unverified.
+- Next, with authorization, finish the Day 5 live layout matrix and verify Gemini calibration, Redis expiry and quotas, distributed deduplication, deployed upload boundaries, and the full bilingual journey in staging before production approval.
+
+## Day 7 checkpoint — 2026-11-25
+
+- `POST /api/interview/answer` validates the session ID, question number and nonblank answer (up to 4,000 characters). It redacts answers before generation and storage and validates the three integer rubric scores and one localized suggestion. The prompt treats the vacancy, question and answer as untrusted data, excludes protected characteristics from the rubric and forbids invented experience or metrics.
+- Versioned writes record the accepted sanitized answer and feedback with the next question or completion, preserving the original session deadline. Retries compare the trimmed, redacted answer and replay its committed result. A competing or out-of-order submission returns 409 with the current question or completed state. An expired session returns 410.
+- Q5 stores feedback and marks the run complete. Its response has `nextQuestion: null` and `finalSummary: null`. Summary and sanitized export remain Day 8 work.
+- All 61 Node tests pass, including the original 50 and 11 new tests. Stub verification covers all four mode/language combinations through Q5, invalid input and model output, retries, competing submissions, expiry, PII masking and the Upstash CAS command shape. Live Gemini scoring quality and Redis behavior remain unverified.
+- The Next.js 16.4.6 production build passes and lists both interview routes.
+- Seven stubbed Chrome flows passed, including all four mode/language combinations from 375 to 1440 px, two CV regression flows, and the offline example. Verified bilingual feedback before advancement, retry with the same draft, duplicate-submit protection, conflict recovery with a separately retained draft, Q5 completion, CV visibility and horizontal overflow.
+- Pre-deployment issue: both overlapping starts and overlapping answers can still make duplicate AI generation calls before a single commit wins. Verify distributed request deduplication and recovery before deployment.
+- Next, use the five committed feedback records to derive the three averages, complete the Q5 summary contract, and deliver a UTF-8 export of the sanitized transcript. Preserve exact replay and original expiry on the completed run.
+
+## Day 6 checkpoint — 2026-11-25
+
+- Branch `feature/mock-interview`, based on `ecb48b9`. Day 6 work is local.
+- `npm test` now uses Node's built-in test discovery and the ESM default flag. On Windows with Node 20.18.0, all 50 tests pass (34 baseline and 16 new).
+- `npm run build` passes on Next.js 16.4.6 and lists `/api/interview/start` alongside the original routes.
+- `POST /api/interview/start` generates and validates five questions from the masked CV and vacancy. The dashboard sends the analysis session ID and the selected mode/language and displays the returned Q1 and focus area with progress shown as 1 of 5. Opening or canceling setup sends no start request. The example shows a fictional Q1 without sending a request or showing scores.
+- The dashboard keeps CV results visible through setup, start, and recoverable errors. Stubbed Chrome verification passed all four mode/language combinations at 375, 768, 1024, and 1440 px, including language selection independent of the dashboard, pending duplicate-submit protection, bilingual retry/quota/expiry, reanalysis with a new session ID, focus and horizontal overflow checks. The same run passed two CV dashboard flows and the offline example. All 50 Node tests and the production build also passed after frontend integration.
+- The start commit preserves the original expiry and charges the existing independent Jakarta-day quota in the same store operation. A retry returns the committed question, including at the quota limit. Concurrent requests can both generate questions, and only one can initialize a given session. Tests cover quota contention, malformed output, provider failure, expiry during generation, and a simulated Upstash response loss.
+- Synthetic email, phone, NIK, and address values were masked before provider input or before storage and HTTP output, as applicable. Route logs exclude session IDs and provider details. Live Gemini and Upstash were not exercised. Live model language and grounding quality are still unverified.
+- The linked Gemini PRD agrees with the interview scope and start contract. Its illustrative ATS metrics and privacy compliance claims are not acceptance evidence. Keep repo rules on supported achievements and measured privacy behavior.
+- Pre-deployment issue: concurrent backend starts can still make duplicate AI generation calls even though only one session update and quota charge commits. Add distributed in-flight deduplication and verify lease expiry and recovery before deployment.
+- Next, implement Day 7 answer validation, rubric scoring, and versioned progression. Wire the UI to preserve the draft on recovery and show returned feedback before revealing the next question. The Day 6 start response carries no committed mode/language metadata, so reconcile concurrent starts with conflicting settings as part of recovery design. Day 8 summary and export, the Day 5 live layout rerun, and deployment checks remain open.
+
+## Previous checkpoint — Days 1–5
+
 Checkpoint: b5daad5b-e19b-4a85-a6f4-830c8a21af47
 Updated UTC: 2026-11-25T14:46:28.980432+00:00
 Project root: /Users/leonhardaudie/Documents/LatihKerja

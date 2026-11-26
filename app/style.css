@@ -116,7 +116,15 @@ summary{cursor:pointer;font-weight:600}
 details p{margin:.5rem 0}
 .controls{display:flex;gap:1rem;flex-wrap:wrap}
 .controls select{display:block;margin-top:.3rem}
-.question{margin:1rem 0}
+.interviewProgress{display:flex;align-items:center;flex-wrap:wrap;gap:.5rem .75rem}
+.interviewProgress .tag{margin:0}
+.interviewProgress progress{width:8rem;max-width:100%;accent-color:var(--ink)}
+.question{margin:1rem 0;overflow-wrap:anywhere}
+.interviewReport{margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--line)}
+.interviewReport h4{margin-top:1rem}
+.interviewReviewItem{margin-top:.6rem}
+.interviewReviewItem summary{cursor:pointer}
+.interviewReviewAnswer{white-space:pre-wrap}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
 h2[tabindex],.alertBanner[tabindex]{scroll-margin-top:5rem}
 @media(min-width:860px){

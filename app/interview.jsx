@@ -1,58 +1,320 @@
-'use client';
-import { Button } from './ui/button';
+﻿'use client';
+
 import { useEffect, useRef, useState } from 'react';
-import { redactPii } from '../lib/redact';
-import { ReportActions } from './report';
+import {
+  ERROR_CODES,
+  INTERVIEW_QUESTION_COUNT,
+  MAX_INTERVIEW_ANSWER_CHARS,
+  SUPPORTED_LANGUAGES,
+  getErrorCopy,
+  isInterviewFeedback,
+  isInterviewQuestion,
+} from '../lib/contracts';
+import { INTERVIEW_FIXTURES } from '../lib/interview-fixtures';
+import { isInterviewReport } from '../lib/interview-report';
+import { InterviewReport } from './interview-report';
+import { Button } from './ui/button';
 
-const questions = {
-  hrd: [
-    ['Kapan kamu membantu rekan menggunakan laporan mingguan?', 'When did you help a teammate use a weekly report?', 'Jelaskan cara kamu mengetahui panduannya membantu.', 'Explain how you knew the instructions helped.'],
-    ['Mengapa kamu tertarik pada magang data ini?', 'What interests you about this data internship?', 'Hubungkan satu proyek dengan tugas dalam lowongan.', 'Connect one project to a task in the vacancy.'],
-    ['Kebiasaan apa yang membantu tim membuat laporan secara konsisten?', 'What team habit would keep weekly reports consistent?', 'Berikan satu contoh kebiasaan yang bisa diulang.', 'Give one example the team could repeat.'],
-    ['Bagaimana kamu menyepakati prioritas saat tenggat mendekat?', 'How would you resolve competing priorities near a deadline?', 'Sebutkan tugas yang perlu diselesaikan lebih dahulu.', 'Name the task you would finish first.'],
-    ['Keterampilan apa yang ingin kamu kembangkan?', 'Which skill would you like to develop?', 'Jelaskan hasil kerja yang dapat menunjukkan kemajuanmu.', 'Describe one piece of work that would show progress.'],
-  ],
-  user: [
-    ['Bagaimana skrip Python mengenali duplikat?', 'How did the Python script identify duplicates?', 'Sebutkan kolom pembanding dan alasannya.', 'Name the columns you compared and explain why.'],
-    ['Bagaimana kamu menguji bahwa baris yang valid tetap tersimpan?', 'How would you check that valid rows were kept?', 'Berikan data uji dan hasil yang diharapkan.', 'Give a test case and the expected result.'],
-    ['Bagian mana dari laporan Excel yang kamu kerjakan?', 'Which part of the Excel report did you work on?', 'Jelaskan satu langkah dan hasilnya.', 'Describe one step and its outcome.'],
-    ['Jika memakai SQL, bagaimana kamu mencari ID yang berulang?', 'How would you find repeated IDs using SQL?', 'Jelaskan cara mengelompokkan dan menghitung ID.', 'Explain how you would group and count IDs.'],
-    ['Bagaimana kamu menelusuri selisih total laporan?', 'How would you investigate a mismatch in report totals?', 'Periksa rentang tanggal dan filter yang digunakan.', 'Check the date range and filters.'],
-  ],
-};
-const scores = [[4,4,3],[3,4,3],[4,4,3],[4,4,4],[4,5,3]];
+const unavailable = { code: ERROR_CODES.TEMPORARILY_UNAVAILABLE };
 
-export function Interview({en,report,onStage}) {
-  const [mode,setMode]=useState('hrd');
-  const [language,setLanguage]=useState('');
-  const [phase,setPhase]=useState('setup');
-  const [draft,setDraft]=useState('');
-  const [answers,setAnswers]=useState([]);
-  const heading=useRef(null);
-  useEffect(()=>{if(phase!=='setup') heading.current?.focus()},[phase]);
-  const english=(language || (en?'en':'id'))==='en';
-  const t=(id,eng)=>english?eng:id;
-  const n=Math.min(4,phase==='feedback'?answers.length-1:answers.length);
-  const bank=questions[mode];
-  const q=i=>bank[i][english?1:0];
-  const tip=i=>bank[i][english?3:2];
-  const dims=[t('Kejelasan','Clarity'),t('Relevansi','Relevance'),t('Dampak','Impact')];
-  const ratings=i=>scores[i].map((v,j)=>dims[j]+' '+v+'/5').join(' · ');
-  const averages=dims.map((d,i)=>d+' '+(scores.reduce((s,row)=>s+row[i],0)/5).toLocaleString(english?'en':'id',{minimumFractionDigits:1})+'/5').join(' · ');
-  const modeLabel=mode==='hrd'?'HR':t('Teknis','Technical');
-  const strength=t('Contoh kekuatan: pengalaman laporan berkaitan dengan posisi magang.','Example strength: reporting experience relates to the internship.');
-  const next=t('Langkah berikutnya: latih satu jawaban dengan hasil yang dapat diperiksa.','Next step: practice one answer with a result you can verify.');
-  const transcript=answers.map((a,i)=>[q(i),a,ratings(i),tip(i)].join('\n')).join('\n\n');
-  return <section lang={english?'en':'id'}><h2 ref={heading} tabIndex="-1">{phase==='summary'?t('Ringkasan latihan','Practice summary'):t('Latihan wawancara','Interview practice')}</h2>
-    <p>{t('Gunakan jawaban fiktif. Skor dan saran contoh sudah ditentukan untuk setiap pertanyaan.','Use fictional answers. Each question has preset example scores and a tip.')}</p>
-    {phase==='setup'?<><div className="controls mt-4"><label>{en?'Interview mode':'Jenis wawancara'}<select value={mode} onChange={e=>setMode(e.target.value)}><option value="hrd">HR</option><option value="user">{en?'Technical':'Teknis'}</option></select></label>
-    <label>{en?'Interview language':'Bahasa wawancara'}<select value={english?'en':'id'} onChange={e=>setLanguage(e.target.value)}><option value="id">Bahasa Indonesia</option><option value="en">English</option></select></label></div>
-    <Button variant="default" className="mt-4" onClick={()=>{setLanguage(english?'en':'id');setPhase('answer');onStage(2)}}>{t('Mulai latihan','Start practice')}</Button></>:
-    phase==='summary'?<><p className="mt-4">{modeLabel} · {english?'EN':'ID'} · 5/5</p><p>{averages}</p><p>{strength}</p><p>{next}</p><details><summary>{t('Baca transkrip','Read transcript')}</summary><pre>{transcript}</pre></details>
-    <ReportActions en={english} text={[report,t('Ringkasan latihan contoh','Sample practice summary'),modeLabel+' · '+(english?'EN':'ID')+' · 5/5',averages,strength,next,transcript].join('\n\n')}/>
-    <Button className="mt-4" onClick={()=>{setPhase('setup');setAnswers([]);onStage(1)}}>{t('Latihan lagi','Practice again')}</Button></>:
-    <><small className="tag mt-4">{modeLabel} · {english?'EN':'ID'} · {t('Pertanyaan','Question')} {n+1}/5</small><h3 className="question">{q(n)}</h3>
-    {phase==='answer'?<form onSubmit={e=>{e.preventDefault();if(!draft.trim())return;setAnswers([...answers,redactPii(draft.trim())]);setDraft('');setPhase('feedback')}}><label htmlFor="answer">{t('Jawaban fiktif','Fictional answer')}</label><textarea id="answer" maxLength={4000} value={draft} onChange={e=>setDraft(e.target.value)}/><Button type="submit" variant="default" disabled={!draft.trim()}>{t('Lihat masukan contoh','View example feedback')}</Button></form>:
-    <><p>{ratings(n)}</p><p>{tip(n)}</p><Button variant="default" className="mt-4" onClick={()=>{if(n===4){setPhase('summary');onStage(3)}else setPhase('answer')}}>{n===4?t('Lihat ringkasan','View summary'):t('Pertanyaan berikutnya','Next question')}</Button></>}</>}
-  </section>;
+function getInterviewError(status, data) {
+  if (status === 410) return { code: ERROR_CODES.SESSION_EXPIRED };
+  if (status === 429) {
+    return { code: ERROR_CODES.QUOTA_REACHED, action: 'interviewStart', resetAt: data?.error?.resetAt };
+  }
+  if (status === 400) return { code: ERROR_CODES.INVALID_INPUT, field: data?.error?.field };
+  return unavailable;
+}
+
+export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = false }) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState('hrd');
+  const [language, setLanguage] = useState(null);
+  const [question, setQuestion] = useState(null);
+  const [draft, setDraft] = useState('');
+  const [conflictDrafts, setConflictDrafts] = useState({});
+  const [result, setResult] = useState(null);
+  const [completed, setCompleted] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState(null);
+  const request = useRef(null);
+  const openButton = useRef(null);
+  const setupHeading = useRef(null);
+  const questionHeading = useRef(null);
+  const feedbackHeading = useRef(null);
+  const completionHeading = useRef(null);
+  const reportHeading = useRef(null);
+  const alert = useRef(null);
+
+  const chosenLanguage = language ?? lang;
+  const t = (id, en) => chosenLanguage === 'en' ? en : id;
+  const dashboardText = (id, en) => lang === 'en' ? en : id;
+  const isExample = !sessionId;
+  const expired = error?.code === ERROR_CODES.SESSION_EXPIRED;
+  const retryable = error?.code === ERROR_CODES.TEMPORARILY_UNAVAILABLE;
+
+  useEffect(() => () => request.current?.abort(), []);
+  useEffect(() => {
+    if (error && open) alert.current?.focus();
+    else if (reportOpen) reportHeading.current?.focus();
+    else if (result) feedbackHeading.current?.focus();
+    else if (completed) completionHeading.current?.focus();
+    else if (question) questionHeading.current?.focus();
+    else if (open) setupHeading.current?.focus();
+  }, [completed, error, open, question, reportOpen, result]);
+
+  async function submit(action, body, handleResponse) {
+    const controller = new AbortController();
+    request.current = controller;
+    setPending(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/interview/${action}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId, ...body }),
+        signal: controller.signal,
+      });
+      const data = await response.json().catch(() => null);
+      if (controller.signal.aborted) return;
+
+      const serverLanguage = response.headers.get('content-language');
+      if (SUPPORTED_LANGUAGES.includes(serverLanguage)) setLanguage(serverLanguage);
+      handleResponse(response, data);
+    } catch {
+      if (!controller.signal.aborted) setError(unavailable);
+    } finally {
+      request.current = null;
+      if (!controller.signal.aborted) setPending(false);
+    }
+  }
+
+  function start(event) {
+    event.preventDefault();
+    if (request.current || expired || question || completed) return;
+
+    if (isExample) {
+      setQuestion(INTERVIEW_FIXTURES[mode][chosenLanguage].questions[0]);
+      onStage(2);
+      return;
+    }
+    setLanguage(chosenLanguage);
+    submit('start', { mode, language: chosenLanguage }, (response, data) => {
+      if (response.status === 409 && data?.error?.completed === true) {
+        recoverCompleted(data.error.report);
+      } else if (!response.ok) setError(getInterviewError(response.status, data));
+      else if (!isInterviewQuestion(data)) setError(unavailable);
+      else {
+        setQuestion(data);
+        onStage(2);
+      }
+    });
+  }
+
+  function recoverCompleted(report) {
+    if (!isInterviewReport(report)) {
+      setError(unavailable);
+      return false;
+    }
+    setCompleted(true);
+    setQuestion(null);
+    setResult({ ...report, feedback: report.transcript[INTERVIEW_QUESTION_COUNT - 1].feedback });
+    onStage(2);
+    return true;
+  }
+
+  function answer(event) {
+    event.preventDefault();
+    if (request.current || expired || completed || result || !question || !draft.trim()) return;
+
+    const number = question.questionNumber;
+    submit('answer', { questionNumber: number, userAnswer: draft }, (response, data) => {
+      if (response.status === 409 && data?.error?.code === ERROR_CODES.QUESTION_CONFLICT) {
+        const { currentQuestion, completed: serverCompleted } = data.error;
+        if (serverCompleted || currentQuestion?.questionNumber !== number) {
+          setConflictDrafts((previous) => ({ ...previous, [number]: draft }));
+          setDraft('');
+        }
+        if (serverCompleted) {
+          if (!recoverCompleted(data.error.report)) return;
+        } else setQuestion(isInterviewQuestion(currentQuestion) ? currentQuestion : null);
+        setError({ code: ERROR_CODES.QUESTION_CONFLICT });
+      } else if (!response.ok) setError(getInterviewError(response.status, data));
+      else if (!isInterviewFeedback(data?.feedback)
+        || (number === INTERVIEW_QUESTION_COUNT
+          ? data.nextQuestion !== null || !isInterviewReport(data)
+          : !isInterviewQuestion(data.nextQuestion, number + 1))) {
+        setError(unavailable);
+      } else {
+        setDraft('');
+        setResult(data);
+        setCompleted(number === INTERVIEW_QUESTION_COUNT);
+      }
+    });
+  }
+
+  const heading = dashboardText('Latihan wawancara', 'Interview practice');
+  return (
+    <section className="interviewBridge" aria-labelledby="interview-bridge-heading">
+      <h2 id="interview-bridge-heading">{heading}</h2>
+      {!open && (
+        <Button ref={openButton} variant="default" onClick={() => setOpen(true)}>
+          {isExample
+            ? dashboardText('Lihat contoh pertanyaan', 'Preview example question')
+            : dashboardText('Siapkan wawancara', 'Set up interview')}
+        </Button>
+      )}
+      {open && (
+        <div lang={chosenLanguage}>
+          {question || completed ? (
+            <>
+              {question && (
+                <>
+                  <div className="interviewProgress">
+                    <span className="tag" id="question-progress">
+                      {t(
+                        `Pertanyaan ${question.questionNumber} dari ${INTERVIEW_QUESTION_COUNT}`,
+                        `Question ${question.questionNumber} of ${INTERVIEW_QUESTION_COUNT}`
+                      )}
+                    </span>
+                    <progress
+                      aria-labelledby="question-progress"
+                      value={question.questionNumber}
+                      max={INTERVIEW_QUESTION_COUNT}
+                    />
+                  </div>
+                  <h3 ref={questionHeading} tabIndex={-1} className="question">{question.questionText}</h3>
+                  <p><strong>{t('Fokus', 'Focus area')}</strong> · {question.focusArea}</p>
+                </>
+              )}
+              {question && !isExample && !result && !completed && (
+                <form onSubmit={answer} aria-busy={pending}>
+                  <fieldset disabled={pending}>
+                    <label htmlFor="interview-answer">{t('Jawaban kamu', 'Your answer')}</label>
+                    <textarea
+                      id="interview-answer"
+                      rows={5}
+                      maxLength={MAX_INTERVIEW_ANSWER_CHARS}
+                      readOnly={expired}
+                      value={draft}
+                      onChange={(event) => setDraft(event.target.value)}
+                    />
+                    <Button type="submit" variant="default" disabled={expired || !draft.trim()}>
+                      {retryable ? t('Coba lagi', 'Retry') : t('Kirim jawaban', 'Submit answer')}
+                    </Button>
+                  </fieldset>
+                </form>
+              )}
+              {result && (
+                <div className="noticeCard">
+                  <h3 ref={feedbackHeading} tabIndex={-1}>{t('Umpan balik jawaban', 'Answer feedback')}</h3>
+                  <ul>
+                    <li>{t('Kejelasan', 'Clarity')} {result.feedback.clarityScore}/5</li>
+                    <li>{t('Relevansi', 'Relevance')} {result.feedback.relevanceScore}/5</li>
+                    <li>{t('Dampak', 'Impact')} {result.feedback.impactScore}/5</li>
+                  </ul>
+                  <p>{result.feedback.suggestion}</p>
+                  {result.nextQuestion && (
+                    <Button className="mt-4" variant="default" onClick={() => {
+                      setQuestion(result.nextQuestion);
+                      setResult(null);
+                    }}>
+                      {t('Pertanyaan berikutnya', 'Next question')}
+                    </Button>
+                  )}
+                </div>
+              )}
+              {completed && (
+                <>
+                  <h3 ref={completionHeading} tabIndex={-1} className="mt-4">
+                    {t('Lima pertanyaan selesai', 'Five questions complete')}
+                  </h3>
+                  {result?.finalSummary && !reportOpen && (
+                    <Button className="mt-4" variant="default" onClick={() => {
+                      setReportOpen(true);
+                      setError(null);
+                      onStage(3);
+                    }}>
+                      {t('Lihat ringkasan', 'View interview report')}
+                    </Button>
+                  )}
+                  {reportOpen && <InterviewReport report={result} language={chosenLanguage} headingRef={reportHeading} />}
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <h3 ref={setupHeading} tabIndex={-1}>{t('Pengaturan wawancara', 'Interview setup')}</h3>
+              <form onSubmit={start} aria-busy={pending}>
+                <fieldset disabled={pending}>
+                  <div className="controls">
+                    <label>
+                      {t('Jenis wawancara', 'Interview mode')}
+                      <select value={mode} onChange={(event) => setMode(event.target.value)}>
+                        <option value="hrd">HR</option>
+                        <option value="user">{t('Teknis', 'Technical')}</option>
+                      </select>
+                    </label>
+                    <label>
+                      {t('Bahasa wawancara', 'Interview language')}
+                      <select value={chosenLanguage} onChange={(event) => setLanguage(event.target.value)}>
+                        <option value="id">Bahasa Indonesia</option>
+                        <option value="en">English</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className="actions">
+                    <Button variant="default" type="submit" disabled={expired}>
+                      {retryable ? t('Coba lagi', 'Retry') : isExample
+                        ? t('Tampilkan pertanyaan', 'Show question')
+                        : t('Mulai wawancara', 'Start interview')}
+                    </Button>
+                    <Button onClick={() => {
+                      setOpen(false);
+                      requestAnimationFrame(() => openButton.current?.focus());
+                    }}>
+                      {t('Batal', 'Cancel')}
+                    </Button>
+                  </div>
+                </fieldset>
+              </form>
+            </>
+          )}
+          {pending && (
+            <p role="status" className="pendingStatus">
+              <span className="spinner" aria-hidden="true" />
+              {question
+                ? t('Menilai jawaban…', 'Evaluating your answer…')
+                : t('Menyiapkan pertanyaan wawancara…', 'Preparing interview questions…')}
+            </p>
+          )}
+          {error && (
+            <div ref={alert} tabIndex={-1} role="alert" className="alertBanner">
+              <p>{retryable
+                ? question
+                  ? t('Jawaban belum bisa dinilai. Draf kamu tersimpan. Coba lagi sesaat lagi.', 'Could not evaluate your answer. Your draft is kept. Try again in a moment.')
+                  : t('Wawancara belum bisa dimulai. Pengaturan kamu tersimpan. Coba lagi sesaat lagi.', 'Could not start the interview. Your settings are kept. Try again in a moment.')
+                : error.code === ERROR_CODES.QUESTION_CONFLICT
+                  ? t('Langkah wawancara berubah. Draf kamu tersimpan.', 'The interview step changed. Your draft is kept.')
+                  : getErrorCopy(error.code, chosenLanguage, error)}</p>
+              {expired && (
+                <div className="actions">
+                  <Button onClick={onReanalyze} disabled={analyzing}>
+                    {t('Analisis CV ulang', 'Run a new CV analysis')}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+          {Object.entries(conflictDrafts).map(([number, savedDraft]) => (
+            <details className="mt-4" key={number}>
+              <summary>{t(`Draf dari pertanyaan ${number}`, `Draft from question ${number}`)}</summary>
+              <textarea readOnly aria-label={t('Draf tersimpan', 'Saved draft')} value={savedDraft} />
+            </details>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 }
