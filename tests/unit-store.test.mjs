@@ -341,8 +341,8 @@ describe('Upstash REST Adapter — createUpstashStore', () => {
     );
     assert.equal(calls[3].command[0], 'EVAL');
 
-    responses.push({ result: 1 });
-    assert.equal(await store.releaseQuota(allowed.reservationId), true);
+    responses.push({ result: 0 });
+    assert.equal(await store.releaseQuota(allowed.reservationId), false);
     assert.equal(calls[4].command[0], 'EVAL');
 
     // 5. updateSession -> GET + EVAL CAS (OK, QUESTION_CONFLICT, SESSION_EXPIRED)

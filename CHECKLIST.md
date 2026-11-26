@@ -2,7 +2,24 @@
 
 At the end of each development phase, update this checklist and HANDOFF.md with verified results, branch and checkpoint, outstanding risks, and the next action. Keep prior milestones and mark incomplete or unverified checks explicitly. Push, merge, and deploy only after approval.
 
-Source: [guideline.md](guideline.md), sections 1–12. The project folder contained the guideline only at intake. All boxes represent future work. A owns backend and AI, B owns frontend and UX, and both own the deployed walkthrough. “Proposed” identifies working defaults or review suggestions that still need team agreement.
+Source: [guideline.md](guideline.md), sections 1–12. Open boxes represent remaining work. “Proposed” identifies working defaults or review suggestions that still need team agreement. A owns backend and AI, B owns frontend and UX, and both own the deployed walkthrough.
+
+## Day 9B · Targeted remediation
+
+**Local remediation PASS. Independent Sol Ultra review pending.** Branch `feature/mock-interview`, uncommitted over `d8efc366f56e66e0c45a2e006be7ec6cf58134cc`.
+
+- [x] Reproduced both High findings before implementation. Fenced canonical CV reservation and session publication, grounded ATS rewrites and keyword matches, and corrected the release-after-commit mock.
+- [x] **90/90 Node tests** including the original 87, production build, seven stubbed Chrome flows and real Redis Lua verification passed. Equivalent PDFs across independent workers produced one HTTP dispatch, one successful allowance charge and one replayable session. Credential-pattern and whitespace checks passed.
+- [ ] Independent review before Day 9C. The prior audit below records the original findings. See [remediation evidence and limits](HANDOFF.md#day-9b-remediation-for-independent-sol-ultra-review).
+
+## Day 9B · Independent audit
+
+**HOLD before Day 9C.** Audited `feature/mock-interview` at `d8efc366f56e66e0c45a2e006be7ec6cf58134cc`. The checkpoint remains unchanged. See [the audit record](HANDOFF.md#day-9b-independent-audit) for references, reproductions and proposed fixes.
+
+- [x] **Audit and local verification** — Reviewed the original CV slice, Days 6–9B, and all 87 baseline test cases. **87/87 tests, the production build, seven stubbed Chrome flows, the four-worker Redis Lua harness and `git diff --check` passed.** Credential scans found no matching secret patterns in tracked files or generated client assets.
+- [ ] **New high-severity CV findings** — Atomically claim the canonical replay identity across equivalent uploads before Gemini dispatch. A focused route probe confirmed duplicate calls and success charges with both memory and real Redis. Require evidence for ATS rewrite claims and reported matches. A fictional stub response confirmed acceptance of unsupported claims.
+- [ ] **Day 9C · Blocked** — After review clears the CV findings, preserve live drafts and committed feedback across mode changes and interrupted requests. A focused 375 px Chrome check reproduced both losses. Improve bilingual recovery and practical privacy safeguards.
+- [ ] **Before public release** — Close or protect the upload diagnostic, protect feedback metrics, and verify residual PII, prompt grounding, selected provider settings, free-tier capacity and accessibility. Real Upstash, deployed Vercel ingress and upload limits, live Gemini evaluation and the Day 5 ten-layout rerun remain pending.
 
 ## Day 1 · Prove the upload path and agree on contracts (§§1–5, 12)
 

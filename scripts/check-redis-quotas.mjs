@@ -42,21 +42,36 @@ if (!isMainThread) {
     try {
       let result;
       if (method === 'analyze') {
-        const [requestId, ip, env] = args;
+        const [requestId, ip, env, pdfVariant, barrier] = args;
         let calls = 0;
         const fixture = FIXTURES.en;
+        const headers = { 'x-vercel-forwarded-for': ip };
+        let body;
+        if (pdfVariant) {
+          body = new FormData();
+          body.set('file', new Blob([pdfVariant], { type: 'application/pdf' }), 'example.pdf');
+          body.set('language', 'en');
+          body.set('jobDescription', fixture.jobDescription);
+          body.set('requestId', requestId);
+        } else {
+          headers['content-type'] = 'application/json';
+          body = JSON.stringify({ cvText: fixture.cvText, jobDescription: fixture.jobDescription, requestId, language: 'en' });
+        }
         const response = await handleAnalyzeCv(new Request('http://localhost/api/analyze-cv', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-vercel-forwarded-for': ip },
-          body: JSON.stringify({
-            cvText: fixture.cvText, jobDescription: fixture.jobDescription, requestId, language: 'en',
-          }),
+          method: 'POST', headers, body,
         }), {
           store, env, logger: () => {},
+          extractPdfText: async () => ({ text: fixture.cvText, pages: 1, bytes: pdfVariant.length }),
           geminiOptions: {
             apiKey: 'local-test-only', models: ['stub-primary', 'stub-fallback'],
             fetchImpl: async () => {
               calls += 1;
+              if (barrier) {
+                const state = new Int32Array(barrier);
+                Atomics.store(state, 0, 1);
+                Atomics.notify(state, 0);
+                Atomics.wait(state, 1, 0, 15000);
+              }
               if (requestId.startsWith('retry-') && calls === 1) return new Response(null, { status: 503 });
               return Response.json({
                 candidates: [{ content: { parts: [{ text: JSON.stringify(fixture.response) }] } }],
@@ -186,6 +201,32 @@ if (!isMainThread) {
     console.log('Repeated outage denials preserved daily CV admissions. Recovery and concurrent dispatch stayed within budget.');
 
     const before = getJakartaDayWindow(Date.parse('2026-11-25T16:59:59.000Z'));
+    const canonicalEnv = { ...env, AI_UPSTREAM_REQUESTS_PER_MINUTE: '20', AI_UPSTREAM_REQUESTS_PER_DAY: '20' };
+    const shared = new SharedArrayBuffer(8);
+    const state = new Int32Array(shared);
+    const analyzePdf = (worker, bytes, barrier) => run(worker, 'analyze', 'same-pdf', '192.0.2.71', canonicalEnv, bytes, barrier);
+    const firstPdf = analyzePdf(0, 'variant A', shared);
+    let contender;
+    try {
+      assert.notEqual(await Atomics.waitAsync(state, 0, 0, 12000).value, 'timed-out');
+      contender = await analyzePdf(1, 'variant B');
+    } finally {
+      Atomics.store(state, 1, 1);
+      Atomics.notify(state, 1);
+    }
+    const winner = await firstPdf;
+    assert.equal(winner.status, 200);
+    assert.equal(winner.calls, 1);
+    assert.equal(contender.status, 503);
+    assert.equal(contender.calls, 0);
+    const canonicalReplay = await analyzePdf(2, 'variant B');
+    assert.deepEqual(canonicalReplay.body, winner.body);
+    assert.equal(canonicalReplay.calls, 0);
+    const quotaKeys = await redis('KEYS', `quota:analyze:*:${deriveIpHash('192.0.2.71', undefined, canonicalEnv)}`);
+    assert.equal(quotaKeys.length, 1);
+    assert.equal(Number(await redis('GET', quotaKeys[0])), 1);
+    assert.equal((await store.getSession(winner.body.sessionId)).sessionId, winner.body.sessionId);
+    console.log('Equivalent PDFs across workers generated one result and replayed the same session.');
     const after = getJakartaDayWindow(Date.parse('2026-11-25T17:00:00.000Z'));
     assert.equal(before.resetAtMs, Date.parse('2026-11-25T17:00:00.000Z'));
     assert.notEqual(before.dateKey, after.dateKey);

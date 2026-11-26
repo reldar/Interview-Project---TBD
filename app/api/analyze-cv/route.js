@@ -267,7 +267,7 @@ export async function handleAnalyzeCv(request, deps = {}) {
           missingKeywords: analysis.missingKeywords,
           rewrites: analysis.rewrites,
         },
-      });
+      }, { deferUntilCommit: true });
 
       const responsePayload = {
         sessionId: session.sessionId,
@@ -283,6 +283,7 @@ export async function handleAnalyzeCv(request, deps = {}) {
         ipHash,
         requestId: effectiveRequestId,
         result: responsePayload,
+        session,
         admission,
       });
       committed = true;
