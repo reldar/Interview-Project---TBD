@@ -141,6 +141,7 @@ function createTrackedStore(opts = {}) {
   return {
     stats,
     store: {
+      ...inner,
       backend: inner.backend,
       getIdempotentResult: (...args) => inner.getIdempotentResult(...args),
       async reserveQuota(...args) {

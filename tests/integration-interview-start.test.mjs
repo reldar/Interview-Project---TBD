@@ -260,6 +260,7 @@ test('Upstash commits through one conditional operation and a lost response can 
       const [command, script, keyCount, sessionKey, ownerKey, quotaKey, , , ,
         operation, token, version, deadline, start, resetAt, limit, , , , , nextDoc] = JSON.parse(options.body);
       if (command === 'GET') return Response.json({ result: committed ?? JSON.stringify(baseline) });
+      if (sessionKey?.startsWith('ai:budget:')) return Response.json({ result: ['allowed'] });
       assert.equal(command, 'EVAL');
       assert.equal(keyCount, 6);
       assert.equal(sessionKey, `sess:${sessionId}`);

@@ -10,6 +10,8 @@ import { buildInterviewSummary, isInterviewSummary } from '../../../../lib/inter
 import { logRouteEvent } from '../../../../lib/logger.js';
 import { redactPii } from '../../../../lib/redact.js';
 import { deriveIpHash, getStore } from '../../../../lib/store.js';
+import { readBoundedJson } from '../../../../lib/request-body.js';
+import { budgetedGeminiProvider, getAiBudgetLimits, requireAiBudget } from '../../../../lib/ai-budget.js';
 
 export const runtime = 'nodejs';
 const ROUTE = '/api/interview/answer';
@@ -53,7 +55,7 @@ export async function handleInterviewAnswer(request, deps = {}) {
   }
 
   try {
-    const body = await request.json().catch(() => null);
+    const body = await readBoundedJson(request, 32_768);
     const { sessionId, questionNumber, userAnswer } = validateInterviewAnswerRequest(body);
     const sanitizedAnswer = redactPii(userAnswer).trim();
     if (!sanitizedAnswer) throw new AppError(ERROR_CODES.INVALID_INPUT, { field: 'userAnswer' });
@@ -73,15 +75,17 @@ export async function handleInterviewAnswer(request, deps = {}) {
     if (interview.completed || interview.currentQuestion !== questionNumber) throw conflict(interview);
     if (records.length !== questionNumber - 1) throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
 
-    const ipHash = deriveIpHash(request, deps.ipSecret);
-    const outcome = await withInterviewGeneration(store, { session, ipHash, questionNumber }, async () => {
+    const ipHash = deriveIpHash(request, deps.ipSecret, deps.env);
+    const limits = getAiBudgetLimits(deps.env);
+    await requireAiBudget(store, limits);
+    const outcome = await withInterviewGeneration(store, { session, ipHash, questionNumber }, async (claim) => {
       const feedback = await generateInterviewFeedback({
         mode: interview.mode,
         language: interview.language,
         question: questionAt(interview, questionNumber),
         sanitizedJd: session.sanitizedJd,
         userAnswer: sanitizedAnswer,
-      }, deps.provider);
+      }, deps.provider ?? budgetedGeminiProvider(store, limits, claim, deps.geminiOptions));
       const record = { questionNumber, userAnswer: sanitizedAnswer, feedback };
       const completed = questionNumber === INTERVIEW_QUESTION_COUNT;
       const nextInterview = {

@@ -52,6 +52,17 @@ async function blockUnexpectedApis(page) {
           });
           return;
         }
+        if (attempt === 3 || attempt === 4) {
+          await route.fulfill({
+            status: 429,
+            json: { error: {
+              code: 'QUOTA_REACHED',
+              action: attempt === 3 ? 'aiBudget' : 'cvIntake',
+              resetAt: '2026-11-26T17:00:00Z',
+            } },
+          });
+          return;
+        }
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -135,6 +146,22 @@ async function blockUnexpectedApis(page) {
       await page.getByRole('button', { name: en ? 'Helpful' : 'Membantu' }).click();
       await page.locator('.feedbackThanks').waitFor();
 
+      const analyze = page.getByRole('button', { name: en ? 'Analyze CV Now' : 'Analisis CV Sekarang' });
+      for (const copy of [
+        en ? 'AI processing is at capacity' : 'Kapasitas pemrosesan AI penuh',
+        en ? 'Too many CV requests' : 'Terlalu banyak permintaan CV',
+      ]) {
+        await analyze.click();
+        await page.locator('#api-error').getByText(copy, { exact: false }).waitFor();
+        assert.equal(await page.locator('#jd').inputValue(), jd);
+        assert.equal(await page.locator('[role="meter"]').getAttribute('aria-valuenow'), '76');
+      }
+      const recovered = page.waitForResponse((response) => response.url().endsWith('/api/analyze-cv') && response.status() === 200);
+      await analyze.click();
+      await recovered;
+      await page.locator('#api-error').waitFor({ state: 'hidden' });
+      assert.equal(capturedRequestIds.length, 5);
+
       // Keyboard Tab accessibility sanity + zero horizontal overflow.
       await page.keyboard.press('Tab');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
@@ -172,10 +199,10 @@ async function blockUnexpectedApis(page) {
       await page.route('**/api/interview/answer', async (route) => {
         const body = route.request().postDataJSON();
         answers.push(body);
-        if (answers.length === 1) return width === 375 || width === 768
+        if (answers.length === 1) return width === 375 || width === 768 || width === 1024
           ? route.fulfill({
             status: 429,
-            json: { error: { code: 'QUOTA_REACHED', action: 'interviewGeneration', resetAt: '2026-11-26T17:00:00Z' } },
+            json: { error: { code: 'QUOTA_REACHED', action: width === 768 || width === 1024 ? 'aiBudget' : 'interviewGeneration', resetAt: '2026-11-26T17:00:00Z' } },
           })
           : route.fulfill({ status: 503, json: { error: { code: 'TEMPORARILY_UNAVAILABLE' } } });
         if (answers.length === 2) await heldAnswer;
@@ -279,8 +306,10 @@ async function blockUnexpectedApis(page) {
       await panel.getByRole('alert').waitFor();
       assert.equal(await draft.inputValue(), 'First answer draft');
       const retry = panel.getByRole('button', { name: en ? 'Retry' : 'Coba lagi' });
-      if (width === 375 || width === 768) {
-        assert.match(await panel.getByRole('alert').innerText(), en ? /Interview processing limit/ : /Batas pemrosesan wawancara/);
+      if (width === 375 || width === 768 || width === 1024) {
+        const expected = width === 375 ? /Batas pemrosesan wawancara/
+          : en ? /AI processing is at capacity/ : /Kapasitas pemrosesan AI penuh/;
+        assert.match(await panel.getByRole('alert').innerText(), expected);
         await submitAnswer.click();
       } else {
         await retry.click();

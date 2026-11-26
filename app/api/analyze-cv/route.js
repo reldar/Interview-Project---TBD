@@ -1,10 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { analyzeCv } from '../../../lib/ats.js';
 import {
   AppError,
   DAILY_LIMITS,
   ERROR_CODES,
-  ERROR_STATUS,
   MAX_MULTIPART_OVERHEAD_BYTES,
   MAX_PDF_BYTES,
   validateCvText,
@@ -15,39 +14,13 @@ import { logRouteEvent } from '../../../lib/logger.js';
 import { extractPdfText } from '../../../lib/pdf.js';
 import { redactPii } from '../../../lib/redact.js';
 import { deriveIpHash, getStore } from '../../../lib/store.js';
+import { readBoundedBytes, readBoundedJson } from '../../../lib/request-body.js';
+import { budgetedGeminiProvider, getAiBudgetLimits, requireAiBudget } from '../../../lib/ai-budget.js';
 
 export const runtime = 'nodejs';
 
 const MAX_JSON_BODY_BYTES = 512_000;
 const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
-
-async function readBoundedBytes(request, byteCeiling, oversizeCode = ERROR_CODES.FILE_TOO_LARGE) {
-  const declaredLength = Number(request.headers.get('content-length'));
-  if (Number.isFinite(declaredLength) && declaredLength > byteCeiling) {
-    throw new AppError(oversizeCode, ERROR_STATUS[oversizeCode]);
-  }
-  if (!request.body) {
-    throw new AppError(ERROR_CODES.INVALID_INPUT, 400, { field: 'body' });
-  }
-
-  const chunks = [];
-  let received = 0;
-  try {
-    for await (const chunk of request.body) {
-      received += chunk.byteLength;
-      if (received > byteCeiling) {
-        chunks.length = 0;
-        throw new AppError(oversizeCode, ERROR_STATUS[oversizeCode]);
-      }
-      chunks.push(chunk);
-    }
-    return Buffer.concat(chunks);
-  } catch (err) {
-    chunks.length = 0;
-    if (err instanceof AppError) throw err;
-    throw new AppError(ERROR_CODES.INVALID_INPUT, 400, { field: 'body' });
-  }
-}
 
 function parseOptionalRequestId(candidate, headerCandidate) {
   const raw =
@@ -81,7 +54,10 @@ export async function handleAnalyzeCv(request, deps = {}) {
   const now = deps.now || (() => Date.now());
   const startedAt = now();
   const log = deps.logger || logRouteEvent;
-  const activeStore = deps.store || getStore();
+  let activeStore;
+  let admission;
+  let providerAttempted = false;
+  let chargeAdmission = true;
 
   let transport = undefined;
   let language = undefined;
@@ -95,11 +71,12 @@ export async function handleAnalyzeCv(request, deps = {}) {
     let rawCvText = null;
     let rawJobDescription = null;
     let requestId = '';
+    let file;
 
     if (contentType.includes('multipart/form-data')) {
       transport = 'multipart';
       const multipartCeiling = MAX_PDF_BYTES + MAX_MULTIPART_OVERHEAD_BYTES;
-      let rawBody = await readBoundedBytes(request, multipartCeiling, ERROR_CODES.FILE_TOO_LARGE);
+      let rawBody = await readBoundedBytes(request, multipartCeiling);
 
       let form;
       try {
@@ -111,7 +88,7 @@ export async function handleAnalyzeCv(request, deps = {}) {
       }
 
       const files = form.getAll('file');
-      const file = files[0];
+      file = files[0];
       if (files.length !== 1 || !(file instanceof Blob)) {
         throw new AppError(ERROR_CODES.INVALID_INPUT, 400, { field: 'file' });
       }
@@ -145,36 +122,9 @@ export async function handleAnalyzeCv(request, deps = {}) {
         headerRequestId
       );
 
-      let fileBytes = new Uint8Array(await file.arrayBuffer());
-      let extracted = null;
-      try {
-        extracted = await extractPdfText(fileBytes, { maxBytes: MAX_PDF_BYTES });
-      } finally {
-        fileBytes = null;
-      }
-
-      pdfPages = extracted.pages;
-      pdfBytes = extracted.bytes;
-      rawCvText = extracted.text;
-      extracted = null;
-
-      const cvCheck = validateCvText(rawCvText);
-      if (!cvCheck.ok) {
-        rawCvText = null;
-        throw new AppError(ERROR_CODES.INVALID_INPUT, 400, { field: 'cvText' });
-      }
-      rawCvText = cvCheck.value;
     } else if (contentType.includes('application/json')) {
       transport = 'json';
-      let rawBody = await readBoundedBytes(request, MAX_JSON_BODY_BYTES, ERROR_CODES.FILE_TOO_LARGE);
-      let body;
-      try {
-        body = JSON.parse(rawBody.toString('utf8'));
-      } catch {
-        throw new AppError(ERROR_CODES.INVALID_INPUT, 400, { field: 'body' });
-      } finally {
-        rawBody = null;
-      }
+      const body = await readBoundedJson(request, MAX_JSON_BODY_BYTES);
 
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         throw new AppError(ERROR_CODES.INVALID_INPUT, 400, { field: 'body' });
@@ -206,11 +156,48 @@ export async function handleAnalyzeCv(request, deps = {}) {
       throw new AppError(ERROR_CODES.INVALID_INPUT, 400, { field: 'body' });
     }
 
-    // Mask identifiers immediately and discard raw extracted/submitted strings before quota or model calls.
-    const sanitizedCvText = redactPii(rawCvText);
-    rawCvText = null;
+    activeStore = deps.store ?? getStore();
+    const ipHash = deriveIpHash(request, deps.ipSecret, deps.env);
     const sanitizedJd = redactPii(rawJobDescription);
     rawJobDescription = null;
+    let fileBytes = file ? new Uint8Array(await file.arrayBuffer()) : null;
+    file = null;
+    const fingerprint = createHmac('sha256', ipHash)
+      .update(JSON.stringify([transport, language, sanitizedJd]))
+      .update(fileBytes ?? redactPii(rawCvText))
+      .digest('hex');
+    const limits = getAiBudgetLimits(deps.env);
+    const intake = await activeStore.claimCvAdmission({
+      ipHash,
+      fingerprint,
+      limits,
+      requestId: requestId ? createHash('sha256').update(`${requestId}\0${fingerprint}`).digest('hex') : '',
+    });
+    if (intake.status === 'cached') {
+      log({ route: '/api/analyze-cv', status: 200, code: 'OK', elapsedMs: now() - startedAt, meta: { transport, language, cached: true } });
+      return Response.json(intake.result);
+    }
+    const quotaActions = { limited: 'analyze', attempts: 'cvAdmission', budget: 'aiBudget', throttled: 'cvIntake' };
+    if (Object.hasOwn(quotaActions, intake.status)) {
+      throw new AppError(ERROR_CODES.QUOTA_REACHED, {
+        action: quotaActions[intake.status],
+        resetAt: intake.resetAt,
+      });
+    }
+    if (intake.status !== 'claimed') throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
+    admission = intake.admission;
+    if (fileBytes) {
+      const extracted = await (deps.extractPdfText ?? extractPdfText)(fileBytes, { maxBytes: MAX_PDF_BYTES });
+      fileBytes = null;
+      pdfPages = extracted.pages;
+      pdfBytes = extracted.bytes;
+      const cvCheck = validateCvText(extracted.text);
+      if (!cvCheck.ok) throw new AppError(ERROR_CODES.INVALID_INPUT, { field: 'cvText' });
+      rawCvText = cvCheck.value;
+    }
+
+    const sanitizedCvText = redactPii(rawCvText);
+    rawCvText = null;
 
     if (!sanitizedCvText.trim()) {
       throw new AppError(ERROR_CODES.INVALID_INPUT, 400, { field: 'cvText' });
@@ -219,7 +206,6 @@ export async function handleAnalyzeCv(request, deps = {}) {
       throw new AppError(ERROR_CODES.INVALID_INPUT, 400, { field: 'jobDescription' });
     }
 
-    const ipHash = deriveIpHash(request, deps.ipSecret);
     const effectiveRequestId = requestId
       ? createHash('sha256')
           .update(`${requestId}\0${language}\0${sanitizedCvText}\0${sanitizedJd}`)
@@ -258,9 +244,17 @@ export async function handleAnalyzeCv(request, deps = {}) {
 
     let committed = false;
     try {
+      if (deps.provider) {
+        await requireAiBudget(activeStore, limits, false, admission);
+        providerAttempted = true;
+      }
       const analysis = await analyzeCv(
         { sanitizedCvText, sanitizedJd, language },
-        { provider: deps.provider }
+        {
+          provider: deps.provider ?? budgetedGeminiProvider(
+            activeStore, limits, admission, deps.geminiOptions, () => { providerAttempted = true; }
+          ),
+        }
       );
 
       const session = await activeStore.createSession({
@@ -289,6 +283,7 @@ export async function handleAnalyzeCv(request, deps = {}) {
         ipHash,
         requestId: effectiveRequestId,
         result: responsePayload,
+        admission,
       });
       committed = true;
 
@@ -328,6 +323,9 @@ export async function handleAnalyzeCv(request, deps = {}) {
       err instanceof AppError
         ? err
         : new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE, 503);
+    if (appErr.code === ERROR_CODES.QUOTA_REACHED && appErr.meta?.action === 'aiBudget' && !providerAttempted) {
+      chargeAdmission = false;
+    }
 
     log({
       route: '/api/analyze-cv',
@@ -346,6 +344,10 @@ export async function handleAnalyzeCv(request, deps = {}) {
     });
 
     return buildErrorJson(appErr);
+  } finally {
+    if (admission) {
+      try { await activeStore.releaseCvAdmission(admission, chargeAdmission); } catch { /* Lease expiration releases admission. */ }
+    }
   }
 }
 

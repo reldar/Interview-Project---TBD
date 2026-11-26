@@ -45,11 +45,12 @@ export async function handleFeedback(request, deps = {}) {
   const now = deps.now || (() => Date.now());
   const startedAt = now();
   const log = deps.logger || logRouteEvent;
-  const activeStore = deps.store || getStore();
+  let activeStore;
 
   let language = undefined;
 
   try {
+    activeStore = deps.store ?? getStore();
     const contentType = (request.headers.get('content-type') || '').toLowerCase();
     if (!contentType.includes('application/json')) {
       throw new AppError(ERROR_CODES.INVALID_INPUT, 400, { field: 'body' });

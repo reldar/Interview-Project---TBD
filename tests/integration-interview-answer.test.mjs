@@ -271,6 +271,7 @@ test('Upstash adapter sends the original deadline and a TTL-preserving CAS for a
       const [command, script, count, key, ownerKey, , , , stepKey,
         operation, token, version, deadline, start, , , , , , , next] = JSON.parse(options.body);
       if (command === 'GET') return Response.json({ result: JSON.stringify(session) });
+      if (key?.startsWith('ai:budget:')) return Response.json({ result: ['allowed'] });
       assert.equal(command, 'EVAL');
       assert.match(script, /KEEPTTL/);
       assert.match(script, /redis.call\('TIME'\)/);

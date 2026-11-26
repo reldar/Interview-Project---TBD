@@ -2,6 +2,8 @@ import { AppError, ERROR_CODES, isInterviewQuestion, validateInterviewStartReque
 import { generateInterviewQuestions, getCompletedInterviewReport, withInterviewGeneration } from '../../../../lib/interview.js';
 import { logRouteEvent } from '../../../../lib/logger.js';
 import { deriveIpHash, getStore } from '../../../../lib/store.js';
+import { readBoundedJson } from '../../../../lib/request-body.js';
+import { budgetedGeminiProvider, getAiBudgetLimits, requireAiBudget } from '../../../../lib/ai-budget.js';
 
 export const runtime = 'nodejs';
 
@@ -12,21 +14,23 @@ export async function handleInterviewStart(request, deps = {}) {
   const log = deps.logger ?? logRouteEvent;
   const startedAt = Date.now();
   try {
-    const body = await request.json().catch(() => null);
+    const body = await readBoundedJson(request, 4_096);
     const { sessionId, mode, language } = validateInterviewStartRequest(body);
     const store = deps.store ?? getStore();
     const session = await store.getSession(sessionId);
     if (!session) throw new AppError(ERROR_CODES.SESSION_EXPIRED);
     let interview = session.interview;
     if (!interview) {
-      const ipHash = deriveIpHash(request, deps.ipSecret);
-      const result = await withInterviewGeneration(store, { session, ipHash }, async () => {
+      const ipHash = deriveIpHash(request, deps.ipSecret, deps.env);
+      const limits = getAiBudgetLimits(deps.env);
+      await requireAiBudget(store, limits);
+      const result = await withInterviewGeneration(store, { session, ipHash }, async (claim) => {
         const questions = await generateInterviewQuestions({
           mode,
           language,
           sanitizedCvText: session.sanitizedCvText,
           sanitizedJd: session.sanitizedJd,
-        }, deps.provider);
+        }, deps.provider ?? budgetedGeminiProvider(store, limits, claim, deps.geminiOptions));
         return { interview: { mode, language, currentQuestion: 1, questions } };
       });
       interview = result.interview ?? result.session?.interview;

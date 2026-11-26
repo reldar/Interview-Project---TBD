@@ -19,10 +19,11 @@ const unavailable = { code: ERROR_CODES.TEMPORARILY_UNAVAILABLE };
 
 function getInterviewError(status, data) {
   if (status === 410) return { code: ERROR_CODES.SESSION_EXPIRED };
+  if (status === 413) return { code: ERROR_CODES.FILE_TOO_LARGE };
   if (status === 429) {
     return {
       code: ERROR_CODES.QUOTA_REACHED,
-      action: data?.error?.action === 'interviewGeneration' ? 'interviewGeneration' : 'interviewStart',
+      action: ['interviewGeneration', 'aiBudget'].includes(data?.error?.action) ? data.error.action : 'interviewStart',
       resetAt: data?.error?.resetAt,
     };
   }
@@ -301,7 +302,9 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
                   : t('Wawancara belum bisa dimulai. Pengaturan kamu tersimpan. Coba lagi sesaat lagi.', 'Could not start the interview. Your settings are kept. Try again in a moment.')
                 : error.code === ERROR_CODES.QUESTION_CONFLICT
                   ? t('Langkah wawancara berubah. Draf kamu tersimpan.', 'The interview step changed. Your draft is kept.')
-                  : getErrorCopy(error.code, chosenLanguage, error)}</p>
+                  : error.code === ERROR_CODES.FILE_TOO_LARGE
+                    ? t('Permintaan wawancara terlalu besar.', 'The interview request is too large.')
+                    : getErrorCopy(error.code, chosenLanguage, error)}</p>
               {expired && (
                 <div className="actions">
                   <Button onClick={onReanalyze} disabled={analyzing}>
