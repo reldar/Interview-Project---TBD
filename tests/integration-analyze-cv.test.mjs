@@ -739,31 +739,34 @@ describe('Integration — POST /api/analyze-cv & POST /api/feedback', () => {
     const { store } = createTrackedStore();
     const logger = () => {};
     const fbUrl = 'http://localhost:3000/api/feedback';
+    const [first, second, third] = await Promise.all(Array.from({ length: 3 }, () => store.createSession({})));
 
     const r1 = await handleFeedback(
-      makeJsonRequest({ url: fbUrl, payload: { positive: true, language: 'id' } }),
+      makeJsonRequest({ url: fbUrl, payload: { sessionId: first.sessionId, positive: true, language: 'id' } }),
       { store, logger }
     );
     assert.equal(r1.status, 200);
     assert.deepEqual(await r1.json(), { positive: 1, total: 1, satisfactionRate: 100 });
 
     const r2 = await handleFeedback(
-      makeJsonRequest({ url: fbUrl, payload: { positive: false, language: 'en' } }),
+      makeJsonRequest({ url: fbUrl, payload: { sessionId: second.sessionId, positive: false, language: 'en' } }),
       { store, logger }
     );
     assert.equal(r2.status, 200);
     assert.deepEqual(await r2.json(), { positive: 1, total: 2, satisfactionRate: 50 });
 
     const r3 = await handleFeedback(
-      makeJsonRequest({ url: fbUrl, payload: { positive: true, language: 'en' } }),
+      makeJsonRequest({ url: fbUrl, payload: { sessionId: third.sessionId, positive: true, language: 'en' } }),
       { store, logger }
     );
     assert.equal(r3.status, 200);
     assert.deepEqual(await r3.json(), { positive: 2, total: 3, satisfactionRate: 66.7 });
 
     const invalidCases = [
-      makeJsonRequest({ url: fbUrl, payload: { positive: 'yes', language: 'id' } }),
-      makeJsonRequest({ url: fbUrl, payload: { positive: true, language: 'es' } }),
+      makeJsonRequest({ url: fbUrl, payload: { positive: true, language: 'id' } }),
+      makeJsonRequest({ url: fbUrl, payload: { sessionId: first.sessionId, positive: 'yes', language: 'id' } }),
+      makeJsonRequest({ url: fbUrl, payload: { sessionId: first.sessionId, positive: true, language: 'es' } }),
+      makeJsonRequest({ url: fbUrl, payload: { sessionId: first.sessionId, positive: true, language: 'id', extra: 'a'.repeat(4096) } }),
       makeJsonRequest({ url: fbUrl, payload: '{invalid-json' }),
       makeJsonRequest({ url: fbUrl, payload: { positive: true, language: 'id' }, contentType: 'text/plain' }),
     ];
@@ -773,5 +776,45 @@ describe('Integration — POST /api/analyze-cv & POST /api/feedback', () => {
       const body = await bad.json();
       assert.equal(body.error?.code, ERROR_CODES.INVALID_INPUT);
     }
+  });
+
+  it('counts the first response once, throttles retries and rejects expired sessions', async () => {
+    let timestamp = Date.parse('2026-11-26T02:00:00Z');
+    const now = () => timestamp;
+    const store = createMemoryStore({ now });
+    const { sessionId, expiresAt } = await store.createSession({});
+    const vote = (positive, language = 'en', id = sessionId) => handleFeedback(
+      makeJsonRequest({ url: 'http://localhost/api/feedback', payload: { sessionId: id, positive, language } }),
+      { store, now, env: {}, logger: () => {} }
+    );
+
+    const unknown = await vote(true, 'en', 'sess_unknown');
+    assert.equal(unknown.status, 410);
+    assert.deepEqual(await unknown.json(), { error: { code: ERROR_CODES.SESSION_EXPIRED } });
+
+    const responses = await Promise.all(Array.from({ length: 9 }, () => vote(true)));
+    for (const response of responses) {
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { total: 1, positive: 1, satisfactionRate: 100 });
+    }
+    const limited = await vote(false, 'id');
+    assert.equal(limited.status, 429);
+    assert.equal(limited.headers.get('retry-after'), '60');
+    assert.deepEqual(await limited.json(), {
+      error: { code: ERROR_CODES.QUOTA_REACHED, resetAt: '2026-11-26T02:01:00.000Z' },
+    });
+
+    timestamp += 60_000;
+    const replay = await vote(false, 'id');
+    assert.equal(replay.status, 200);
+    assert.equal((await replay.json()).total, 1);
+    assert.deepEqual((await store.getFeedbackSummary()).byLanguage, {
+      id: { positive: 0, total: 0 },
+      en: { positive: 1, total: 1 },
+    });
+    assert.equal((await store.getSession(sessionId)).expiresAt, expiresAt);
+    timestamp = Date.parse(expiresAt);
+    assert.equal((await vote(true)).status, 410);
+    assert.equal((await store.getFeedbackSummary()).total, 1);
   });
 });

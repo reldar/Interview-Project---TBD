@@ -261,9 +261,11 @@ describe('Daily Quotas, Concurrency, Idempotency & Jakarta Reset — createMemor
       },
     });
 
-    await store.recordFeedback({ positive: true, language: 'id' });
-    await store.recordFeedback({ positive: true, language: 'en' });
-    const summary = await store.recordFeedback({ positive: false, language: 'id' });
+    const [first, second, third] = await Promise.all(Array.from({ length: 3 }, () => store.createSession({})));
+    const ipHash = 'feedback-fixture';
+    await store.recordFeedback({ sessionId: first.sessionId, ipHash, positive: true, language: 'id' });
+    await store.recordFeedback({ sessionId: second.sessionId, ipHash, positive: true, language: 'en' });
+    const summary = await store.recordFeedback({ sessionId: third.sessionId, ipHash, positive: false, language: 'id' });
 
     assert.deepEqual(summary, {
       positive: 2,
@@ -277,7 +279,7 @@ describe('Daily Quotas, Concurrency, Idempotency & Jakarta Reset — createMemor
     assert.deepEqual(await store.getFeedbackSummary(), summary);
 
     await assert.rejects(
-      () => store.recordFeedback({ positive: 'yes', language: 'id' }),
+      () => store.recordFeedback({ sessionId: first.sessionId, ipHash, positive: 'yes', language: 'id' }),
       (err) => err instanceof AppError && err.code === ERROR_CODES.INVALID_INPUT && err.status === 400
     );
   });
@@ -384,9 +386,12 @@ describe('Upstash REST Adapter — createUpstashStore', () => {
     assert.equal(expiredUpd.code, ERROR_CODES.SESSION_EXPIRED);
 
     // 6. recordFeedback -> EVAL
-    responses.push({ result: ['4', '3', '2', '2', '2', '1'] });
-    const fb = await store.recordFeedback({ positive: true, language: 'id' });
-    assert.equal(calls[calls.length - 1].command[0], 'EVAL');
+    const vote = { sessionId: 'sess_u1', ipHash: 'feedback-fixture', positive: true, language: 'id' };
+    responses.push({ result: ['ok', ['4', '3', '2', '2', '2', '1']] });
+    const fb = await store.recordFeedback(vote);
+    assert.deepEqual(calls.at(-1).command.slice(2, 7), [
+      4, 'stats:feedback', 'sess:sess_u1', 'feedback:voted:sess_u1', 'feedback:attempts:feedback-fixture',
+    ]);
     assert.deepEqual(fb, {
       positive: 3,
       total: 4,
@@ -396,6 +401,10 @@ describe('Upstash REST Adapter — createUpstashStore', () => {
         en: { positive: 1, total: 2 },
       },
     });
+    responses.push({ result: ['limited', 7_000] }, { result: ['expired'] }, { result: null });
+    await assert.rejects(() => store.recordFeedback(vote), { code: ERROR_CODES.QUOTA_REACHED });
+    await assert.rejects(() => store.recordFeedback(vote), { code: ERROR_CODES.SESSION_EXPIRED });
+    await assert.rejects(() => store.recordFeedback(vote), { code: ERROR_CODES.TEMPORARILY_UNAVAILABLE });
   });
 
   it('fails closed with 503 TEMPORARILY_UNAVAILABLE on network error, HTTP 500, Redis error payload, or partial config', async () => {

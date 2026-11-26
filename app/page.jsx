@@ -82,17 +82,12 @@ function getScoreBand(score, en) {
   return en ? 'Early alignment' : 'Kesesuaian awal';
 }
 
-function FeedbackCard({ lang, sessionKey }) {
+function FeedbackCard({ lang, sessionId }) {
   const en = lang === 'en';
   const t = (id, english) => (en ? english : id);
   const locale = en ? 'en-US' : 'id-ID';
   const [status, setStatus] = useState('idle');
   const [summary, setSummary] = useState(null);
-
-  useEffect(() => {
-    setStatus('idle');
-    setSummary(null);
-  }, [sessionKey]);
 
   async function submitFeedback(positive) {
     if (status === 'submitting' || status === 'sent') return;
@@ -101,8 +96,16 @@ function FeedbackCard({ lang, sessionKey }) {
       const res = await fetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ positive, language: lang }),
+        body: JSON.stringify({ sessionId, positive, language: lang }),
       });
+      if (res.status === 410) {
+        setStatus('expired');
+        return;
+      }
+      if (res.status === 429) {
+        setStatus('limited');
+        return;
+      }
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || typeof data.total !== 'number') {
         setStatus('error');
@@ -119,53 +122,61 @@ function FeedbackCard({ lang, sessionKey }) {
     }
   }
 
+  const statusCopy = {
+    expired: t(
+      'Sesi analisis CV sudah berakhir. Tinjauan kamu masih bisa dibaca dan disalin.',
+      'This CV analysis session has expired. You can still read and copy your review.'
+    ),
+    limited: t(
+      'Terlalu banyak percobaan mengirim masukan. Tunggu sebentar lalu coba lagi.',
+      'Too many feedback attempts. Wait a moment and try again.'
+    ),
+    error: t(
+      'Masukan belum terkirim. Kamu bisa mencoba lagi tanpa kehilangan hasil tinjauan.',
+      'Feedback could not be sent right now. You can try again without losing your review.'
+    ),
+  };
+
   return (
     <div className="feedbackCard" aria-labelledby="feedback-heading">
       <h3 id="feedback-heading">{t('Apakah tinjauan ini membantu?', 'Was this review helpful?')}</h3>
       <p className="feedbackHint">
         {t(
-          'Opsional · Hanya mencatat jumlah tanggapan agregat tanpa riwayat pribadi.',
-          'Optional · Records aggregate counts only, with no personal history.'
+          'Opsional · Satu tanggapan per sesi analisis CV. Hasil digabungkan dengan tanggapan lainnya.',
+          'Optional · One vote per CV analysis session. Your vote contributes to aggregate totals.'
         )}
       </p>
-      {status === 'sent' ? (
-        <p role="status" aria-live="polite" className="feedbackThanks">
-          {t('Terima kasih atas masukanmu.', 'Thanks for your feedback.')}
-          {summary && typeof summary.total === 'number' && summary.total > 0 && (
-            <>
-              {' '}
-              {en
-                ? `(${summary.positive.toLocaleString(locale)} of ${summary.total.toLocaleString(locale)} responses found this helpful.)`
-                : `(${summary.positive.toLocaleString(locale)} dari ${summary.total.toLocaleString(locale)} tanggapan menilai membantu.)`}
-            </>
-          )}
-        </p>
-      ) : (
-        <>
-          <div className="actions">
-            <Button
-              onClick={() => submitFeedback(true)}
-              disabled={status === 'submitting'}
-            >
-              {t('Membantu', 'Helpful')}
-            </Button>
-            <Button
-              onClick={() => submitFeedback(false)}
-              disabled={status === 'submitting'}
-            >
-              {t('Perlu perbaikan', 'Needs work')}
-            </Button>
-          </div>
-          {status === 'error' && (
-            <p role="status" aria-live="polite" className="feedbackError">
-              {t(
-                'Masukan belum terkirim. Kamu bisa mencoba lagi tanpa kehilangan hasil tinjauan.',
-                'Feedback could not be sent right now. You can try again without losing your review.'
-              )}
-            </p>
-          )}
-        </>
+      {status !== 'sent' && status !== 'expired' && (
+        <div className="actions">
+          <Button
+            onClick={() => submitFeedback(true)}
+            disabled={status === 'submitting'}
+          >
+            {t('Membantu', 'Helpful')}
+          </Button>
+          <Button
+            onClick={() => submitFeedback(false)}
+            disabled={status === 'submitting'}
+          >
+            {t('Perlu perbaikan', 'Needs work')}
+          </Button>
+        </div>
       )}
+      <p
+        role="status"
+        aria-atomic="true"
+        className={status === 'sent' ? 'feedbackThanks' : statusCopy[status] ? 'feedbackError' : undefined}
+      >
+        {status === 'sent' ? t('Terima kasih atas masukanmu.', 'Thanks for your feedback.') : statusCopy[status]}
+        {status === 'sent' && summary?.total > 0 && (
+          <>
+            {' '}
+            {en
+              ? `(${summary.positive.toLocaleString(locale)} of ${summary.total.toLocaleString(locale)} responses found this helpful.)`
+              : `(${summary.positive.toLocaleString(locale)} dari ${summary.total.toLocaleString(locale)} tanggapan menilai membantu.)`}
+          </>
+        )}
+      </p>
     </div>
   );
 }
@@ -370,7 +381,7 @@ function AnalysisContent({
       <ReportActions text={reportText} en={en} filename={filename} />
       <PrivacyNotice lang={lang} />
       {!isExample && (
-        <FeedbackCard lang={lang} sessionKey={analysis.sessionId} />
+        <FeedbackCard key={analysis.sessionId} lang={lang} sessionId={analysis.sessionId} />
       )}
     </section>
   );
@@ -766,11 +777,9 @@ export default function Workspace() {
                       />
                     </label>
                   </div>
-                  {fileError && (
-                    <p id="pdf-error" role="alert" className="fieldError">
-                      {getErrorCopy(fileError.code, lang, fileError.meta)}
-                    </p>
-                  )}
+                  <p id="pdf-error" role="alert" aria-atomic="true" className={fileError ? 'fieldError' : undefined}>
+                    {fileError && getErrorCopy(fileError.code, lang, fileError.meta)}
+                  </p>
 
                   <div className="fieldHeader">
                     <label htmlFor="jd">{t('Deskripsi lowongan', 'Job description')}</label>
@@ -794,11 +803,9 @@ export default function Workspace() {
                       'Paste the responsibilities and qualifications from the vacancy…'
                     )}
                   />
-                  {jdError && (
-                    <p id="jd-error" role="alert" className="fieldError">
-                      {getErrorCopy(jdError.code, lang, jdError.meta)}
-                    </p>
-                  )}
+                  <p id="jd-error" role="alert" aria-atomic="true" className={jdError ? 'fieldError' : undefined}>
+                    {jdError && getErrorCopy(jdError.code, lang, jdError.meta)}
+                  </p>
 
                   <div className="actions">
                     <Button variant="default" type="submit" disabled={busy}>

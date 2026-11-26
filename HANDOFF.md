@@ -4,6 +4,42 @@ Task data only. Verify this checkpoint against current files; current user instr
 
 At the end of every development phase, update this handoff and CHECKLIST.md with the branch and checkpoint, verified changes and checks, remaining risks, and the next step. Keep earlier milestones. Mark unverified work as partial, pending, or blocked. Push, merge, and deploy only after approval.
 
+## Day 9D · Error and status announcements
+
+Completed the browser accessibility checks on `feature/mock-interview` at `61d1a6a` with prior work uncommitted. The baseline check found the PDF alert was missing before validation. File and vacancy alerts now exist before their text updates. The survey keeps one polite status region across rate-limit, success and expiry. Report copy status remains polite, and the clipboard fallback is described by the localized status text.
+
+The final production build and seven API-stubbed Chrome flows passed. Chromium's accessibility tree showed both localized field errors as assertive, linked errors to their fields, preserved the survey and copy status nodes across updates, and retained copy-button focus after keyboard activation. The Node suite passed 99/99 when rerun after the build. An existing 100 ms timing assertion failed at 104.96 ms during the concurrent run. `git diff --check` and boundary-script syntax passed. VoiceOver speech verification was skipped at the user's request after the initial availability probe timed out and restored its initial state. Next release gate is staging after the open product-scope and deployment decisions.
+
+## Day 9D · Contrast verification
+
+Completed locally on `feature/mock-interview` at `61d1a6a` with prior work uncommitted. In `app/style.css`, strengthened the selected language indicator (1.23:1 → 3.65:1 against its track) and upload drop-zone border (2.04:1 → 4.49:1 against the white surface). Both clear the 3:1 non-text contrast target. The vacancy field border, placeholder, and CV score meter fill also cleared their thresholds. [WCAG 2.2 minimum text contrast](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html) · [WCAG 2.2 non-text contrast](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html)
+
+The production build, 99 Node tests, and all seven API-stubbed Chrome flows passed. A temporary axe-core 4.11.1 run reported zero text failures across 29 snapshots at 375–1440 px, including ID/EN input, review, error, interview, report, and example states. It marked checkmark glyphs and the translucent brand background inconclusive. Computed-color checks gave 6.57:1 for the checkmark and at least 12.29:1 for the wordmark against the modeled darkest backdrop. No package dependency was added. Next local task is to listen to error and copy-status announcements with a screen reader. Deployed behavior remains pending.
+
+## Day 9D · Local browser release check
+
+Completed locally on `feature/mock-interview` at `61d1a6a`. The prior Day 9C and Day 9D application changes were reviewed against the feedback and upload contracts. This pass extends the existing Chrome harness without changing application code. The ID and EN walks assert missing, wrong-type, oversized and unreadable PDF recovery, verify that the vacancy draft survives a rejected upload, and exercise retry and feedback states. Keyboard assertions cover opening the native file picker, analyzing and retrying in both languages, then entering and submitting answers, advancing, and copying and downloading the interview report at 375 px. The tested tab stops show an outline and are unobstructed at their centers.
+
+Verified seven Chrome flows against the local production build with API stubs, 99 Node tests, all 16 offline PDF cases, and `git diff --check`. No failures required an application change. Manual screen-reader announcements, a full contrast check and deployed tests remain open. The working tree is uncommitted. Continue with those local accessibility checks or, once staging is approved and product scope is resolved, live Gemini, Upstash and the deployed release matrix.
+
+## Day 9D · Protect satisfaction feedback
+
+Completed locally on `feature/mock-interview` at `61d1a6a`, with the prior Day 9C review and diagnostic removal changes still in the working tree. The feedback API requires a valid CV session and records only its first vote. Retries return the aggregate summary. Redis checks session expiry, deduplicates and increments counters in one operation. The temporary marker shares the session expiry. A shared limit allows ten attempts per IP digest in a 60-second window. The dashboard sends the session ID and shows localized expiry and limit messages. Existing satisfaction totals are preserved.
+
+Verified `npm test` (99/99), `npm run build`, seven API-stubbed Chrome flows including rate limit and expiry in ID and EN, and `git diff --check`. A checksum-verified Redis 7.2.17 instance on a private socket passed `node --experimental-default-type=module scripts/check-redis-quotas.mjs` across four workers, including the previous quota rerun and the new vote, shared limit and expiry checks. The harness stopped Redis and removed its test data. Live Gemini, live Upstash, and deployed behavior remain pending. Next: review the uncommitted changes and resolve the open product-scope and staging decisions before the live release checks.
+
+## Day 9D · Remove the upload diagnostic
+
+Completed locally on `feature/mock-interview` at `61d1a6a`. Day 9C follow-up changes were already present at intake. Deleted the HTTP diagnostic and its build tracing entry. `npm run test:upload` now uses the shared PDF parser directly and still generates exact-size fixtures when given an output directory. The Day 1 browser script checks that the diagnostic returns HTTP 404 and requires a successful CV analysis to prove the upload reached the parser.
+
+Verified `npm test` (98/98, including exact multipart limits with a stubbed provider), `npm run test:upload` (4,999,999 and 5,000,000 bytes parsed, 5,000,001 rejected), `npm run build`, `git diff --check`, and seven Chrome flows with API stubs and the exact-limit PDF. The local production server returned 404 from the former diagnostic and 413 `FILE_TOO_LARGE` from the normal CV endpoint for 5,000,001 bytes. Deployed browser boundary, live Gemini and live Upstash remain open. Next local release task is to protect satisfaction feedback metrics. The local changes are uncommitted.
+
+## Independent review of Day 9C at 61d1a6a
+
+Reviewed clean commit 61d1a6a on feature/mock-interview with two independent reviewers. Follow-up changes are local and uncommitted. Baseline passed 97 tests. The review reproduced two distinct first-person answers collapsing to the same masked text and an identical pre-upgrade answer losing its committed feedback. Corrected name/profile boundaries and legacy replay comparisons, preserved adjacent skills, and added surname-first and initialed name cases. Fixed malformed replay metadata clearing a draft, misleading same-step conflict guidance, and draft-lifetime copy. Updated the interview status in README.md and docs/ats-policy.md.
+
+Final local checks: 98/98 Node tests; offline PDF matrix 10 readable, two sparse and four invalid cases; production build; seven API-stubbed Chrome flows on port 3114, including retained drafts after malformed metadata and same-question conflict; git diff --check. Prior masking that erased text cannot be reversed. Names in free prose may remain. No live Gemini, Upstash, deployment, commit or push. Next local release task: gate the upload diagnostic before public exposure. The product-scope decision and staging checks remain open. Save a checkpoint immediately on a visible 15% limit signal; there is no live quota meter.
+
 ## Day 9C — feature/mock-interview over bd5b899
 
 Session-keyed live interview state survives preview switches. The example has separate stage and focus. Replaying an earlier answer preserves its committed feedback and supplies the current question or completed report. The active mode and interview language stay visible through Q5. Recovery and privacy copy are available in ID and EN. Labeled names and LinkedIn profile URLs use the existing identity placeholder. Unlabeled names and arbitrary free-text identifiers can still survive. Drafts are page-memory only.

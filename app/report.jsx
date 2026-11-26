@@ -1,10 +1,11 @@
 'use client';
 import { Button } from './ui/button';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 export function ReportActions({ text, en, filename }) {
   const [state, setState] = useState('');
   const fallbackRef = useRef(null);
+  const statusId = useId();
 
   useEffect(() => {
     setState('');
@@ -62,7 +63,7 @@ export function ReportActions({ text, en, filename }) {
       <div className="actions">
         <Button onClick={copy}>{en ? 'Copy' : 'Salin'}</Button>
         <Button onClick={download}>{en ? 'Download .txt' : 'Unduh .txt'}</Button>
-        <small role="status" aria-live="polite" className="exportStatus">
+        <small id={statusId} role="status" aria-atomic="true" className="exportStatus">
           {statusText}
         </small>
       </div>
@@ -73,6 +74,7 @@ export function ReportActions({ text, en, filename }) {
           rows="6"
           className="copyFallback"
           aria-label={en ? 'Select and copy report' : 'Pilih dan salin laporan'}
+          aria-describedby={statusId}
           value={text}
           onFocus={(e) => e.target.select()}
         />

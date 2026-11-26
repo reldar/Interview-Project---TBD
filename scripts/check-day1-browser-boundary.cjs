@@ -58,22 +58,19 @@ function buildExactSizePdf(size) {
       files[size] = filePath;
     }
 
-    // 1. Server-side direct multipart checks on BOTH /api/upload-proof and /api/analyze-cv for 5,000,001 B.
+    const diagnostic = await fetch(new URL('/api/upload-proof', baseUrl), { method: 'POST' });
+    assert.equal(diagnostic.status, 404, 'Upload diagnostic must not be publicly callable');
+
+    // Exercise the application-level size check on the real upload endpoint.
     const overBuf = await fs.readFile(files[MAX_PDF_BYTES + 1]);
-    for (const endpoint of ['/api/upload-proof', '/api/analyze-cv']) {
-      const form = new FormData();
-      form.append('file', new Blob([overBuf], { type: 'application/pdf' }), 'boundary-5000001.pdf');
-      if (endpoint === '/api/analyze-cv') {
-        form.append('jobDescription', 'Data intern requiring Python, Excel, and SQL.');
-        form.append('language', 'en');
-      }
-      const res = await fetch(new URL(endpoint, baseUrl), { method: 'POST', body: form });
-      assert.equal(res.status, 413, `Expected 413 on ${endpoint} for 5,000,001 B`);
-      const json = await res.json();
-      const code = typeof json.error === 'string' ? json.error : json.error?.code;
-      assert.equal(code, 'FILE_TOO_LARGE', `Expected FILE_TOO_LARGE on ${endpoint}`);
-      console.log('server-oversize-pass', endpoint, res.status, code);
-    }
+    const form = new FormData();
+    form.append('file', new Blob([overBuf], { type: 'application/pdf' }), 'boundary-5000001.pdf');
+    form.append('jobDescription', 'Data intern requiring Python, Excel, and SQL.');
+    form.append('language', 'en');
+    const res = await fetch(new URL('/api/analyze-cv', baseUrl), { method: 'POST', body: form });
+    assert.equal(res.status, 413, 'Expected 413 on /api/analyze-cv for 5,000,001 B');
+    assert.equal((await res.json()).error?.code, 'FILE_TOO_LARGE');
+    console.log('server-oversize-pass', '/api/analyze-cv', res.status, 'FILE_TOO_LARGE');
 
     // 2. Real Browser UI checks in ID (4,999,999 B & 5,000,001 B) and EN (5,000,000 B & 5,000,001 B).
     for (const [lang, validSize] of [
@@ -103,7 +100,7 @@ function buildExactSizePdf(size) {
       // B. Valid boundary (4,999,999 B or 5,000,000 B) + JD (multipart overhead > 5,000,000 B):
       // Submit through the real browser UI with NO route mocking and inspect actual server HTTP response!
       await page.locator('#pdf').setInputFiles(files[validSize]);
-      assert.equal(await page.locator('#pdf-error').count(), 0, 'Valid boundary file must pass client validation');
+      assert.equal(await page.locator('#pdf-error').textContent(), '', 'Valid boundary file must pass client validation');
       const dropText = await page.locator('.drop').textContent();
       assert.ok(dropText.includes(`boundary-${validSize}.pdf`), 'Drop zone must display selected filename');
 
@@ -117,34 +114,10 @@ function buildExactSizePdf(size) {
       const status = apiRes.status();
       const payload = await apiRes.json().catch(() => null);
 
-      // Must NOT be blocked by host/server size ceiling (413), MIME rejection (415), invalid input (400),
-      // or PDF parse failure (422). Reaching 200 (live Gemini) or 503 (upstream Gemini high-demand after
-      // passing RAM PDF parsing & redaction!) proves the full boundary PDF + multipart overhead reached the RAM parser!
-      assert.ok(
-        status === 200 || status === 503,
-        `Boundary PDF (${validSize} B) was blocked before/during parsing! HTTP ${status}: ${JSON.stringify(payload)}`
-      );
-      if (status === 200) {
-        assert.ok(Number.isInteger(payload?.atsScore), 'Expected valid atsScore on 200');
-        await page.locator('[role="meter"]').waitFor({ timeout: 5_000 });
-        console.log('browser-boundary-pass', lang, validSize, 'HTTP 200 (live Gemini + UI rendered)', 'score=' + payload.atsScore);
-      } else {
-        assert.equal(payload?.error?.code, 'TEMPORARILY_UNAVAILABLE');
-        await page.locator('#api-error').waitFor({ timeout: 5_000 });
-        console.log('browser-boundary-pass', lang, validSize, 'HTTP 503 (passed RAM parser + redaction; upstream Gemini busy)');
-      }
-
-      // Also confirm /api/upload-proof directly parses this exact boundary PDF and extracts text in RAM!
-      const validBuf = await fs.readFile(files[validSize]);
-      const proofForm = new FormData();
-      proofForm.append('file', new Blob([validBuf], { type: 'application/pdf' }), `boundary-${validSize}.pdf`);
-      const proofRes = await fetch(new URL('/api/upload-proof', baseUrl), { method: 'POST', body: proofForm });
-      assert.equal(proofRes.status, 200);
-      const proofJson = await proofRes.json();
-      assert.equal(proofJson.bytes, validSize);
-      assert.equal(proofJson.pages, 1);
-      assert.ok(proofJson.characters > 100, `Expected extracted text > 100 chars, got ${proofJson.characters}`);
-      console.log('server-ram-parse-pass', lang, validSize, proofJson);
+      assert.equal(status, 200, `Could not verify analysis for ${validSize} B (HTTP ${status}, ${payload?.error?.code ?? 'no app error code'})`);
+      assert.ok(Number.isInteger(payload?.atsScore), 'Expected valid atsScore on 200');
+      await page.locator('[role="meter"]').waitFor({ timeout: 5_000 });
+      console.log('browser-boundary-pass', lang, validSize, 'HTTP 200', 'score=' + payload.atsScore);
 
       await page.close();
     }

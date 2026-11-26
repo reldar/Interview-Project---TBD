@@ -26,6 +26,43 @@ function extractMultipartRequestId(route) {
   return match ? match[1] : null;
 }
 
+async function tabTo(page, control) {
+  await control.waitFor();
+  for (let tabs = 0; tabs < 24 && !await control.evaluate((node) => node === document.activeElement); tabs += 1) {
+    await page.keyboard.press('Tab');
+  }
+  assert.ok(await control.evaluate((node) => node === document.activeElement), 'Control must be reachable by Tab');
+  assert.ok(await control.evaluate((node) => {
+    const style = getComputedStyle(node.closest('.browse') ?? node);
+    return style.outlineStyle !== 'none' && Number.parseFloat(style.outlineWidth) > 0;
+  }), 'Keyboard focus must have a visible outline');
+  assert.ok(await control.evaluate((node) => {
+    const target = node.closest('.browse') ?? node;
+    const { left, top, width, height } = target.getBoundingClientRect();
+    return target.contains(document.elementFromPoint(left + width / 2, top + height / 2));
+  }), 'The focused control must be visible in the viewport and clear of overlays');
+}
+
+async function browserAccessibilityNode(client, selector) {
+  const { root } = await client.send('DOM.getDocument');
+  const { nodeId } = await client.send('DOM.querySelector', { nodeId: root.nodeId, selector });
+  assert.ok(nodeId, `Expected ${selector} in the DOM`);
+  const { node } = await client.send('DOM.describeNode', { nodeId });
+  const { nodes } = await client.send('Accessibility.getPartialAXTree', { backendNodeId: node.backendNodeId });
+  const accessible = nodes.find((item) => item.backendDOMNodeId === node.backendNodeId);
+  assert.ok(accessible && !accessible.ignored, `Expected ${selector} in the accessibility tree`);
+  return accessible;
+}
+
+async function assertLiveRegion(client, selector, role, priority) {
+  const node = await browserAccessibilityNode(client, selector);
+  const property = (name) => node.properties?.find((attribute) => attribute.name === name)?.value.value;
+  assert.equal(node.role.value, role);
+  assert.equal(property('live'), priority);
+  assert.equal(property('atomic'), true);
+  return node.nodeId;
+}
+
 (async () => {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   try {
@@ -37,13 +74,20 @@ function extractMultipartRequestId(route) {
       const pageErrors = [];
       page.on('pageerror', (err) => pageErrors.push(err.message));
       await blockUnexpectedApis(page);
-      await page.route('**/api/feedback', (route) => route.fulfill({
-        json: { total: 1, positive: 1, satisfactionRate: 100 },
-      }));
+      const votes = [];
+      await page.route('**/api/feedback', (route) => {
+        votes.push(route.request().postDataJSON());
+        if (votes.length === 1) return route.fulfill({ status: 429, json: { error: { code: 'QUOTA_REACHED' } } });
+        if (votes.length === 3) return route.fulfill({ status: 410, json: { error: { code: 'SESSION_EXPIRED' } } });
+        return route.fulfill({ json: { total: 1, positive: 1, satisfactionRate: 100 } });
+      });
 
       const capturedRequestIds = [];
       let attempt = 0;
       await page.route('**/api/analyze-cv', async (route) => {
+        if (route.request().postDataBuffer()?.includes(Buffer.from('filename="unreadable.pdf"'))) {
+          return route.fulfill({ status: 422, json: { error: { code: 'PDF_UNREADABLE' } } });
+        }
         attempt += 1;
         const requestId = extractMultipartRequestId(route);
         if (requestId) capturedRequestIds.push(requestId);
@@ -72,7 +116,7 @@ function extractMultipartRequestId(route) {
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify({
-            sessionId,
+            sessionId: attempt === 2 ? sessionId : sessionId + '_new',
             atsScore: 76,
             matchedKeywords: ['Python', 'Excel'],
             missingKeywords: ['SQL'],
@@ -98,27 +142,70 @@ function extractMultipartRequestId(route) {
 
       await page.goto(baseUrl);
       if (en) await page.getByRole('button', { name: 'EN', exact: true }).click();
+      const accessibility = await page.context().newCDPSession(page);
+      await accessibility.send('Accessibility.enable');
+      const pdfAlert = await assertLiveRegion(accessibility, '#pdf-error', 'alert', 'assertive');
+      const jdAlert = await assertLiveRegion(accessibility, '#jd-error', 'alert', 'assertive');
+      const analyze = page.getByRole('button', { name: en ? 'Analyze CV Now' : 'Analisis CV Sekarang' });
+      const picker = page.locator('#pdf');
+      const vacancy = page.locator('#jd');
 
       // Inline client validation before uploading anything.
-      await page.getByRole('button', { name: en ? 'Analyze CV Now' : 'Analisis CV Sekarang' }).click();
+      await tabTo(page, analyze);
+      await page.keyboard.press('Enter');
       await page.locator('#pdf-error').waitFor();
       assert.equal(await page.evaluate(() => document.activeElement?.id), 'pdf');
+      assert.equal(await assertLiveRegion(accessibility, '#pdf-error', 'alert', 'assertive'), pdfAlert);
+      const fileDescription = await browserAccessibilityNode(accessibility, '#pdf');
+      assert.match(fileDescription.description?.value, en ? /Choose one readable PDF/ : /Pilih satu berkas PDF/);
+      for (const [file, copy] of [
+        [{ name: 'wrong.txt', mimeType: 'text/plain', buffer: Buffer.from('Fictional CV') },
+          en ? /Unsupported file format/ : /Format berkas belum didukung/],
+        [{ name: 'oversized.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(5_000_001) },
+          en ? /exceeds the 5 MB limit/ : /melebihi batas 5 MB/],
+      ]) {
+        await picker.setInputFiles(file);
+        await page.locator('#pdf-error').getByText(copy).waitFor();
+        assert.equal(await picker.getAttribute('aria-invalid'), 'true');
+        assert.match(await picker.getAttribute('aria-describedby'), /\bpdf-error\b/);
+      }
+      assert.equal(attempt, 0);
 
       // Upload valid PDF + blank JD -> JD field-specific error + focus on #jd.
-      await page.locator('#pdf').setInputFiles(pdf);
-      await page.getByRole('button', { name: en ? 'Analyze CV Now' : 'Analisis CV Sekarang' }).click();
+      await tabTo(page, picker);
+      const fileChooser = page.waitForEvent('filechooser');
+      await page.keyboard.press('Enter');
+      await (await fileChooser).setFiles(pdf);
+      await tabTo(page, analyze);
+      await page.keyboard.press('Enter');
       await page.locator('#jd-error').waitFor();
       assert.equal(await page.evaluate(() => document.activeElement?.id), 'jd');
+      assert.equal(await assertLiveRegion(accessibility, '#jd-error', 'alert', 'assertive'), jdAlert);
+      const jdDescription = await browserAccessibilityNode(accessibility, '#jd');
+      assert.match(jdDescription.description?.value, en ? /Paste a non-empty job description/ : /Tempel deskripsi lowongan/);
+
+      await picker.setInputFiles({ name: 'unreadable.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n') });
+      await vacancy.fill(jd);
+      await tabTo(page, analyze);
+      await page.keyboard.press('Enter');
+      await page.locator('#api-error').getByText(en ? /We couldn’t read the text/ : /Teks CV belum bisa dibaca/).waitFor();
+      await assertLiveRegion(accessibility, '#api-error', 'alert', 'assertive');
+      assert.equal(await vacancy.inputValue(), jd);
+      assert.equal(await picker.getAttribute('aria-invalid'), 'true');
+      assert.match(await picker.getAttribute('aria-describedby'), /\bapi-error\b/);
+      assert.equal(await page.locator('[role="meter"]').count(), 0);
 
       // Fill JD -> submit -> 503 alert (draft retained, zero fabricated score).
-      await page.locator('#jd').fill(jd);
-      await page.getByRole('button', { name: en ? 'Analyze CV Now' : 'Analisis CV Sekarang' }).click();
+      await picker.setInputFiles(pdf);
+      await tabTo(page, analyze);
+      await page.keyboard.press('Enter');
       await page.locator('#api-error').waitFor();
       assert.equal(await page.locator('#jd').inputValue(), 'Data intern requiring Python, Excel, and SQL.');
       assert.equal(await page.locator('[role="meter"]').count(), 0);
 
       // Click Retry -> must send identical requestId and render real results + move focus to #analysis-heading.
-      await page.getByRole('button', { name: en ? 'Retry' : 'Coba lagi' }).click();
+      await tabTo(page, page.getByRole('button', { name: en ? 'Retry' : 'Coba lagi' }));
+      await page.keyboard.press('Enter');
       await page.locator('[role="meter"]').waitFor();
       assert.equal(capturedRequestIds.length, 2);
       assert.equal(capturedRequestIds[0], capturedRequestIds[1], 'Retry must reuse logical requestId');
@@ -137,6 +224,8 @@ function extractMultipartRequestId(route) {
       );
       await page.getByRole('button', { name: en ? 'Copy' : 'Salin', exact: true }).first().click();
       const fallbackText = await page.locator('textarea.copyFallback').inputValue();
+      const fallback = await browserAccessibilityNode(accessibility, '.copyFallback');
+      assert.match(fallback.description?.value, en ? /Clipboard unavailable/ : /Papan klip tidak tersedia/);
       assert.ok(fallbackText.includes('76/100'));
       assert.ok(!fallbackText.includes('sess_e2e_secret_token'));
 
@@ -147,11 +236,16 @@ function extractMultipartRequestId(route) {
       assert.ok(exported.includes('76/100'));
       assert.ok(!exported.includes('sess_e2e_secret_token'));
 
-      // Exercise the optional satisfaction widget with a stub response.
-      await page.getByRole('button', { name: en ? 'Helpful' : 'Membantu' }).click();
+      const helpful = page.getByRole('button', { name: en ? 'Helpful' : 'Membantu', exact: true });
+      const voteStatus = await assertLiveRegion(accessibility, '.feedbackCard [role="status"]', 'status', 'polite');
+      await helpful.click();
+      await page.locator('.feedbackError').getByText(en ? /Too many feedback attempts/ : /Terlalu banyak percobaan/).waitFor();
+      assert.equal(await assertLiveRegion(accessibility, '.feedbackError', 'status', 'polite'), voteStatus);
+      await helpful.click();
       await page.locator('.feedbackThanks').waitFor();
+      assert.equal(await assertLiveRegion(accessibility, '.feedbackThanks', 'status', 'polite'), voteStatus);
+      assert.deepEqual(votes, Array.from({ length: 2 }, () => ({ sessionId, positive: true, language: en ? 'en' : 'id' })));
 
-      const analyze = page.getByRole('button', { name: en ? 'Analyze CV Now' : 'Analisis CV Sekarang' });
       for (const copy of [
         en ? 'AI processing is at capacity' : 'Kapasitas pemrosesan AI penuh',
         en ? 'Too many CV requests' : 'Terlalu banyak permintaan CV',
@@ -165,6 +259,11 @@ function extractMultipartRequestId(route) {
       await analyze.click();
       await recovered;
       await page.locator('#api-error').waitFor({ state: 'hidden' });
+      await helpful.click();
+      await page.locator('.feedbackError').getByText(en ? /session has expired/ : /Sesi analisis CV sudah berakhir/).waitFor();
+      assert.equal(votes.at(-1).sessionId, sessionId + '_new');
+      assert.equal(await helpful.count(), 0);
+      assert.equal(await page.locator('[role="meter"]').getAttribute('aria-valuenow'), '76');
       assert.equal(capturedRequestIds.length, 5);
       assert.notEqual(
         capturedRequestIds[2],
@@ -177,8 +276,7 @@ function extractMultipartRequestId(route) {
         'Each new submission after 200 OK must send a distinct requestId'
       );
 
-      // Keyboard Tab accessibility sanity + zero horizontal overflow.
-      await page.keyboard.press('Tab');
+      // Ensure errors and their recovery do not introduce horizontal overflow.
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
       assert.equal(pageErrors.length, 0, `Unexpected page errors: ${pageErrors.join('; ')}`);
       console.log('passed-real-flow', width, en ? 'EN' : 'ID');
@@ -217,6 +315,15 @@ function extractMultipartRequestId(route) {
       const heldAnswer = new Promise((resolve) => { releaseAnswer = resolve; });
       await page.route('**/api/interview/answer', async (route) => {
         const body = route.request().postDataJSON();
+        if (body.userAnswer === 'Recovery check') {
+          if (width === 768) return route.fulfill({ status: 409, json: { error: {
+            code: 'QUESTION_CONFLICT', currentQuestion: question, completed: false,
+          } } });
+          return route.fulfill({ json: {
+            feedback: { clarityScore: 4, impactScore: 3, relevanceScore: 5, suggestion },
+            nextQuestion: questions[1], resumeQuestion: false, finalSummary: null,
+          } });
+        }
         answers.push(body);
         if (lostFinal) {
           assert.deepEqual(body, answers.at(-2));
@@ -293,6 +400,14 @@ function extractMultipartRequestId(route) {
       assert.equal(starts.length, 0);
 
       const en = language === 'en';
+      async function activate(control) {
+        if (width === 375) {
+          await tabTo(page, control);
+          await page.keyboard.press('Enter');
+        } else {
+          await control.click();
+        }
+      }
       const start = panel.getByRole('button', { name: en ? 'Start interview' : 'Mulai wawancara', exact: true });
       async function selectSettings() {
         await setup.click();
@@ -329,13 +444,26 @@ function extractMultipartRequestId(route) {
       const submitAnswer = panel.getByRole('button', { name: en ? 'Submit answer' : 'Kirim jawaban' });
       const next = panel.getByRole('button', { name: en ? 'Next question' : 'Pertanyaan berikutnya' });
       const feedbackHeading = panel.getByRole('heading', { name: en ? 'Answer feedback' : 'Umpan balik jawaban' });
-      await draft.fill('First answer draft');
+      if (width === 768 || width === 1024) {
+        await draft.fill('Recovery check');
+        await submitAnswer.click();
+        await panel.getByRole('alert').waitFor();
+        assert.equal(await draft.inputValue(), 'Recovery check');
+        if (width === 768) assert.match(await panel.getByRole('alert').innerText(), /still in the editor/);
+        else await panel.getByRole('button', { name: 'Coba lagi' }).waitFor();
+      }
+      if (width === 375) {
+        await tabTo(page, draft);
+        await page.keyboard.insertText('First answer draft');
+      } else {
+        await draft.fill('First answer draft');
+      }
       const openExample = page.getByRole('button', { name: uiEn ? 'Open example' : 'Buka contoh' });
       const back = page.getByRole('button', { name: uiEn ? 'Back to your CV review' : 'Kembali ke hasil CV kamu' });
       await openExample.click();
       await back.click();
       assert.equal(await draft.inputValue(), 'First answer draft');
-      await submitAnswer.click();
+      await activate(panel.getByRole('button', { name: width === 1024 ? 'Coba lagi' : en ? 'Submit answer' : 'Kirim jawaban' }));
       await panel.getByRole('alert').waitFor();
       assert.equal(await draft.inputValue(), 'First answer draft');
       const retry = panel.getByRole('button', { name: en ? 'Retry' : 'Coba lagi' });
@@ -364,13 +492,19 @@ function extractMultipartRequestId(route) {
       await panel.getByText(en ? 'Relevance 5/5' : 'Relevansi 5/5').waitFor();
       await panel.getByText(en ? 'Impact 3/5' : 'Dampak 3/5').waitFor();
       assert.equal(await panel.getByRole('heading', { name: questions[1].questionText }).count(), 0);
-      await next.click();
+      await activate(next);
 
       for (let number = 2; number <= 5; number += 1) {
         await panel.getByRole('heading', { name: questions[number - 1].questionText }).waitFor();
         await panel.getByText((mode === 'hrd' ? 'HR' : en ? 'Technical' : 'Teknis') + ' · ' + (en ? 'English' : 'Bahasa Indonesia'), { exact: true }).waitFor();
-        await draft.fill(number === 5 ? longAnswer : `Draft for question ${number}`);
-        await submitAnswer.click();
+        const answer = number === 5 ? longAnswer : `Draft for question ${number}`;
+        if (width === 375) {
+          await tabTo(page, draft);
+          await page.keyboard.insertText(answer);
+        } else {
+          await draft.fill(answer);
+        }
+        await activate(submitAnswer);
         if (number === 5 && width === 1440) {
           await retry.waitFor();
           assert.equal(await draft.inputValue(), longAnswer);
@@ -384,14 +518,14 @@ function extractMultipartRequestId(route) {
           continue;
         }
         await feedbackHeading.waitFor();
-        if (number !== 5) await next.click();
+        if (number !== 5) await activate(next);
       }
       await panel.getByRole('heading', { name: en ? 'Five questions complete' : 'Lima pertanyaan selesai' }).waitFor();
       assert.equal(await next.count(), 0);
       assert.equal(await draft.count(), 0);
       const reportHeading = panel.getByRole('heading', { name: en ? 'Interview report' : 'Ringkasan wawancara' });
       assert.equal(await reportHeading.count(), 0);
-      await panel.getByRole('button', { name: en ? 'View interview report' : 'Lihat ringkasan' }).click();
+      await activate(panel.getByRole('button', { name: en ? 'View interview report' : 'Lihat ringkasan' }));
       await reportHeading.waitFor();
       assert.equal(await reportHeading.evaluate((node) => node === document.activeElement), true);
       const report = panel.locator('.interviewReport');
@@ -410,11 +544,18 @@ function extractMultipartRequestId(route) {
         value: { writeText: async (text) => { window.copiedInterview = text; } },
       }));
       const copy = report.getByRole('button', { name: en ? 'Copy' : 'Salin', exact: true });
-      await copy.click();
+      const accessibility = await page.context().newCDPSession(page);
+      await accessibility.send('Accessibility.enable');
+      const exportStatus = '.interviewReport .exportStatus';
+      const copyStatus = await assertLiveRegion(accessibility, exportStatus, 'status', 'polite');
+      await tabTo(page, copy);
+      await page.keyboard.press('Enter');
       await report.getByText(en ? 'Copied.' : 'Tersalin.', { exact: true }).waitFor();
+      assert.equal(await assertLiveRegion(accessibility, exportStatus, 'status', 'polite'), copyStatus);
+      assert.ok(await copy.evaluate((button) => button === document.activeElement));
       const clipboard = await page.evaluate(() => window.copiedInterview);
       const downloadEvent = page.waitForEvent('download');
-      await report.getByRole('button', { name: en ? 'Download .txt' : 'Unduh .txt' }).click();
+      await activate(report.getByRole('button', { name: en ? 'Download .txt' : 'Unduh .txt' }));
       const download = await downloadEvent;
       assert.match(download.suggestedFilename(), /\.(txt)$/);
       const bytes = await fs.readFile(await download.path());

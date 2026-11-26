@@ -145,17 +145,19 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
           setError(unavailable);
           return;
         }
-        if (serverCompleted || currentQuestion?.questionNumber !== number) {
+        const archivedDraft = serverCompleted || currentQuestion?.questionNumber !== number;
+        if (archivedDraft) {
           setConflictDrafts((previous) => ({ ...previous, [number]: draft }));
           setDraft('');
         }
         if (serverCompleted) {
           if (!recoverCompleted(data.error.report)) return;
         } else setQuestion(isInterviewQuestion(currentQuestion) ? currentQuestion : null);
-        setError({ code: ERROR_CODES.QUESTION_CONFLICT });
+        setError({ code: ERROR_CODES.QUESTION_CONFLICT, archivedDraft });
       } else if (!response.ok) setError(getInterviewError(response.status, data));
-      else if ((data?.completedReport && !isInterviewReport(data.completedReport))
-        || (data?.resumeQuestion && !isInterviewQuestion(data.resumeQuestion))
+      else if ((data?.completedReport !== undefined && !isInterviewReport(data.completedReport))
+        || (data?.resumeQuestion !== undefined && (!isInterviewQuestion(data.resumeQuestion)
+          || data.resumeQuestion.questionNumber <= number + 1 || data.completedReport !== undefined))
         || !isInterviewFeedback(data?.feedback)
         || (number === INTERVIEW_QUESTION_COUNT
           ? data.nextQuestion !== null || !isInterviewReport(data)
@@ -209,7 +211,7 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
                 <form onSubmit={answer} aria-busy={pending}>
                   <fieldset disabled={pending}>
                     <label htmlFor="interview-answer">{t('Jawaban kamu', 'Your answer')}</label>
-                    <p id="answer-privacy">{t('Gunakan contoh fiktif. Hapus nama, kontak, dan tautan profil. Draf tersedia hingga halaman ditutup atau dimuat ulang. Jawaban yang dikirim diproses Gemini setelah penyamaran.', 'Use fictional examples. Remove names, contact details and profile links. Drafts last until you close or reload this page. Submitted answers go to Gemini after masking.')}</p>
+                    <p id="answer-privacy">{t('Gunakan contoh fiktif. Hapus nama, kontak, dan tautan profil. Draf terhapus saat halaman ditutup, dimuat ulang, atau analisis CV baru berhasil. Jawaban yang dikirim diproses Gemini setelah penyamaran.', 'Use fictional examples. Remove names, contact details and profile links. Closing or reloading this page, or completing a new CV analysis, clears your draft. Submitted answers go to Gemini after masking.')}</p>
                     <textarea aria-describedby="answer-privacy"
                       id="interview-answer"
                       rows={5}
@@ -318,7 +320,9 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
                   ? t('Hasil belum diterima. Coba lagi dengan jawaban yang sama untuk memulihkan umpan balik.', 'Feedback did not arrive. Retry with the same answer to recover any saved feedback.')
                   : t('Wawancara belum bisa dimulai. Pengaturan kamu tersimpan. Coba lagi sesaat lagi.', 'Could not start the interview. Your settings are kept. Try again in a moment.')
                 : error.code === ERROR_CODES.QUESTION_CONFLICT
-                  ? t('Langkah wawancara berubah. Buka draf pertanyaan sebelumnya untuk menyalin jawabanmu.', 'The interview step changed. Open the previous question’s draft to copy your answer.')
+                  ? !error.archivedDraft
+                    ? t('Jawaban masih ada di kolom jawaban. Periksa lalu kirim kembali.', 'Your answer is still in the editor. Review it and submit again.')
+                    : t('Langkah wawancara berubah. Buka draf pertanyaan sebelumnya untuk menyalin jawabanmu.', 'The interview step changed. Open the previous question’s draft to copy your answer.')
                   : error.code === ERROR_CODES.FILE_TOO_LARGE
                     ? t('Permintaan terlalu besar. Persingkat jawaban lalu kirim kembali.', 'The request is too large. Shorten your answer and submit again.')
                     : getErrorCopy(error.code, chosenLanguage, error)}</p>

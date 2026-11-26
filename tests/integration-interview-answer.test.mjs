@@ -356,3 +356,18 @@ test('repeated answer failures reach the step budget without losing earlier resu
   now += INTERVIEW_ATTEMPT_WINDOW_MS;
   assert.equal((await answer(2, 'Draft')).status, 200);
 });
+
+test('labeled names preserve distinct answer evidence and older records can replay', async () => {
+  const { answer, store, sessionId } = await setup();
+  const original = 'Name: Alex. I tested the release.';
+  const accepted = await answer(1, original);
+  assert.equal(accepted.status, 200);
+  assert.equal((await answer(1, 'Name: Alex. I skipped testing.')).status, 409);
+
+  const saved = await store.getSession(sessionId);
+  const answers = [{ ...saved.interview.answers[0], userAnswer: original }];
+  await store.updateSession(sessionId, saved.version, { interview: { ...saved.interview, answers } });
+  const replay = await answer(1, original, { generateStructuredResponse() { assert.fail('replay called provider'); } });
+  assert.equal(replay.status, 200);
+  assert.deepEqual(await replay.json(), await accepted.json());
+});

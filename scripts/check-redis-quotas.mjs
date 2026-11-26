@@ -122,6 +122,24 @@ if (!isMainThread) {
     assert.equal(await redis('PING'), 'PONG');
     console.log('Verified private Redis socket, protected mode and TCP port disabled.');
 
+    const feedbackSession = await store.createSession({});
+    const vote = { sessionId: feedbackSession.sessionId, ipHash: 'feedback-fixture', language: 'id', positive: true };
+    const castVotes = await Promise.all(workers.map((_, i) => run(i, 'recordFeedback', vote)));
+    assert.ok(castVotes.every(({ total, positive }) => total === 1 && positive === 1));
+    const sessionKey = `sess:${vote.sessionId}`;
+    const markerKey = `feedback:voted:${vote.sessionId}`;
+    assert.equal(await redis('PEXPIRETIME', markerKey), await redis('PEXPIRETIME', sessionKey));
+    const conflictingRetry = await run(0, 'recordFeedback', { ...vote, positive: false, language: 'en' });
+    assert.deepEqual(conflictingRetry.byLanguage, { id: { total: 1, positive: 1 }, en: { total: 0, positive: 0 } });
+    const attempts = await Promise.allSettled(Array.from({ length: 8 }, (_, i) => run(i, 'recordFeedback', vote)));
+    assert.equal(attempts.filter(({ status }) => status === 'fulfilled').length, 5);
+    assert.equal(attempts.filter(({ reason }) => reason?.code === 'QUOTA_REACHED').length, 3);
+    await redis('PEXPIRE', 'feedback:attempts:feedback-fixture', 0);
+    await redis('PEXPIRE', sessionKey, 0);
+    await assert.rejects(run(3, 'recordFeedback', vote), { code: 'SESSION_EXPIRED' });
+    assert.equal((await store.getFeedbackSummary()).total, 1);
+    console.log('Feedback counted once, admission capped across four workers and expired sessions rejected.');
+
     const quota = { action: 'analyze', ipHash: 'cv-quota-fixture' };
     const reserve = () => Promise.all(Array.from({ length: 12 }, (_, i) => run(i, 'reserveQuota', quota)));
     const holds = (await reserve()).filter(({ allowed }) => allowed);

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
+import { ERROR_CODES, MAX_PDF_BYTES } from '../lib/contracts.js';
+import { extractPdfText } from '../lib/pdf.js';
 
 // Pad before the cross-reference table so each exact-size fixture remains a valid PDF.
 function pdf(size) {
@@ -25,20 +27,18 @@ function pdf(size) {
   return bytes;
 }
 
-const base = process.env.UPLOAD_BASE_URL || 'http://localhost:3000';
-for (const size of [4999999, 5000000, 5000001]) {
+for (const size of [MAX_PDF_BYTES - 1, MAX_PDF_BYTES, MAX_PDF_BYTES + 1]) {
   const filename = 'fictional-' + size + '.pdf';
-  const data = pdf(size);
+  const data = Buffer.from(pdf(size), 'latin1');
   if (process.argv[2]) await writeFile(process.argv[2] + '/' + filename, data);
-  const form = new FormData();
-  form.append('file', new Blob([data], { type: 'application/pdf' }), filename);
-  const response = await fetch(new URL('/api/upload-proof', base), { method: 'POST', body: form });
-  assert.equal(response.status, size > 5000000 ? 413 : 200);
-  const result = await response.json();
-  if (response.ok) {
-    assert.equal(result.pages, 1);
-    assert.equal(result.bytes, size);
-    assert.equal(result.characters, 'Fictional CV Python'.length);
-  } else assert.equal(result.error, 'FILE_TOO_LARGE');
-  console.log(size, response.status, result);
+  if (size > MAX_PDF_BYTES) {
+    await assert.rejects(extractPdfText(data), { code: ERROR_CODES.FILE_TOO_LARGE, status: 413 });
+    console.log(size, 'rejected as oversized');
+    continue;
+  }
+  const result = await extractPdfText(data);
+  assert.equal(result.pages, 1);
+  assert.equal(result.bytes, size);
+  assert.equal(result.text, 'Fictional CV Python');
+  console.log(size, 'parsed in memory');
 }

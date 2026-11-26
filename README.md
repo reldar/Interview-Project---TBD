@@ -7,13 +7,13 @@ Bilingual (**Bahasa Indonesia** / **English**) account-free career preparation w
 ## Current Status
 
 - **Days 1–5 (CV Analysis Slice — Implemented & Verified Locally):**
-  - Single-screen Apple-inspired bilingual dashboard (`ID` / `EN`) with drag-and-drop/browse/replace PDF input, job description input, inline validation, pending/retry states, coaching score meter, matched/missing keyword groups, sparse-CV handling (`0–2` bullets without hallucination), UTF-8 `.txt` copy/download with clipboard fallback, §8 privacy notice, optional §11 satisfaction feedback widget, and optional **Open example** preview (including the 5-step example interview).
-  - Real `POST /api/analyze-cv` (multipart `file`, `jobDescription`, `language`, optional `requestId` + JSON parity), `POST /api/feedback`, and `POST /api/upload-proof`.
+  - Single-screen Apple-inspired bilingual dashboard (`ID` / `EN`) with drag-and-drop/browse/replace PDF input, job description input, inline validation, pending/retry states, coaching score meter, matched/missing keyword groups, sparse-CV handling (`0–2` bullets without hallucination), UTF-8 `.txt` copy/download with clipboard fallback, §8 privacy notice, optional §11 satisfaction feedback widget, and optional **Open example** preview (including a fictional first interview question).
+  - Real `POST /api/analyze-cv` (multipart `file`, `jobDescription`, `language`, optional `requestId` + JSON parity) and `POST /api/feedback`.
   - RAM-only PDF extraction (`pdf-parse` 2.4.5, `5,000,000`-byte limit, `first: 30` page cap, `%PDF-` magic header validation).
   - Server-side §8 PII redaction (`[EMAIL_REDACTED]`, `[PHONE_REDACTED]`, `[IDENTITY_REDACTED]`, `[ADDRESS_REDACTED]`) across CV text, job descriptions, interview answers, model outputs, session records, and exports.
   - Gemini API structured JSON output adapter (`x-goog-api-key` header, prompt-injection delimiter framing/escaping, fallback model chain, strict schema/evidence/alias validator).
   - Upstash Redis REST store (atomic Lua `EVAL`, fixed 90-minute session TTL, `Asia/Jakarta` calendar-day `5` analysis / `3` interview-start IP quotas, SHA-256 payload-bound `requestId` idempotency, fail-closed `503`) + identical-semantics local in-memory fallback.
-- **Days 6–8 (Next):** Live `POST /api/interview/start` and `POST /api/interview/answer` routes, HR/Technical ID/EN rubric scoring, Q1–Q5 CAS progression, and real interview UI wiring.
+- **Days 6–9C (implemented locally):** Live `POST /api/interview/start` and `POST /api/interview/answer` routes, HR/Technical ID/EN rubric scoring, Q1–Q5 CAS progression, and a bilingual interview report. Live drafts stay in page memory during example previews. Retrying a committed answer recovers its feedback.
 - **Days 9–10 (On Hold):** Production Vercel deployment, deployed 5 MB / 4.5 MB Vercel Serverless Function body limit verification (`npm run test:day1`), live Upstash Redis + `QUOTA_HMAC_SECRET` enforcement, and full deployed §10 verification matrix.
 
 See [CHECKLIST.md](CHECKLIST.md) and [docs/ats-policy.md](docs/ats-policy.md) for detailed status, scoring/alias policies, privacy caveats, and verification details.
@@ -82,8 +82,7 @@ npm run start
 | Route | Method | Purpose |
 | --- | --- | --- |
 | `/api/analyze-cv` | `POST` | Multipart (`file`, `jobDescription`, `language`, optional `requestId`) or JSON (`cvText`, `jobDescription`, `language`, optional `requestId`). Extracts PDF in RAM, redacts PII, validates Gemini structured output, creates a 90-min session, and enforces 5/day IP quota. |
-| `/api/feedback` | `POST` | Records optional §11 aggregate satisfaction counts (`{ positive: boolean, language: 'id' \| 'en' }`) with zero PII or user history. |
-| `/api/upload-proof` | `POST` | Day 1 upload boundary & RAM PDF extraction proof (`<= 5,000,000` bytes). |
+| `/api/feedback` | `POST` | Records the first vote for a live CV session (`{ sessionId, positive, language }`) and returns aggregate counts. Expired or unknown sessions return 410. A shared limit of ten attempts per network address per minute returns 429 with `Retry-After`. |
 
 ---
 
@@ -96,10 +95,10 @@ npm test
 # Production build check
 npm run build
 
-# Exact 4,999,999 / 5,000,000 / 5,000,001 byte HTTP upload check (requires running server)
-UPLOAD_BASE_URL=http://127.0.0.1:3000 npm run test:upload
+# Offline in-memory PDF parser check at 4,999,999 / 5,000,000 / 5,000,001 bytes
+npm run test:upload
 
-# Unmocked Chrome browser UI 5 MB boundary test (reusable against deployed URLs)
+# Chrome 5 MB boundary test through /api/analyze-cv (requires working analysis configuration)
 UPLOAD_BASE_URL=http://127.0.0.1:3000 npm run test:day1
 
 # Day 5 10-layout readable + 2 sparse + 4 invalid PDF harness (--offline for deterministic dry run)
@@ -115,13 +114,12 @@ npm run test:layouts
 app/
   page.jsx                     # Single-screen bilingual workspace UI
   report.jsx                   # Copy, download .txt, and clipboard fallback actions
-  interview.jsx                # 5-step example mock interview UI (uses lib/redact.js)
+  interview.jsx                # Live interview UI and offline question preview
   style.css                    # Apple-inspired responsive & accessible styling
   limit.js                     # Shared 5,000,000-byte PDF threshold
   api/
     analyze-cv/route.js        # Real CV analysis Route Handler
     feedback/route.js          # Aggregate §11 satisfaction counter
-    upload-proof/route.js      # Day 1 upload boundary check
 lib/
   redact.js                    # Client-safe §8 PII redaction engine
   contracts.js                 # Client-safe schemas, 29 alias groups, validators, bilingual errors, export builder

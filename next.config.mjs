@@ -7,7 +7,6 @@ export default {
   poweredByHeader: false,
   serverExternalPackages: ['pdf-parse'],
   outputFileTracingIncludes: {
-    '/api/upload-proof': PDF_WORKER_FILES,
     '/api/analyze-cv': PDF_WORKER_FILES,
   },
   async headers() {

@@ -721,6 +721,9 @@ it('masks labeled names and LinkedIn profiles while retaining surrounding job ev
   assert.doesNotMatch(value, /rina|contoh/i);
   assert.match(value, /Python engineer/);
   assert.match(value, /SQL/);
+  assert.equal(redactPii('Name: Sample, Fictional  Skills: Python, SQL'), 'Name: [IDENTITY_REDACTED]  Skills: Python, SQL');
+  assert.equal(redactPii('linkedin.com/in/fictional|Python'), '[IDENTITY_REDACTED]|Python');
+  assert.equal(redactPii('Name: A. Sample. I tested it.'), 'Name: [IDENTITY_REDACTED]. I tested it.');
   assert.match(redactPii('Name: Rina Test, Skills: SQL'), /Skills: SQL/);
   assert.match(redactPii('Nama: Rina Test\tPython'), /Python/);
 });

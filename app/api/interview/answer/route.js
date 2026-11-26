@@ -39,6 +39,10 @@ function answerResult(interview, record) {
   };
 }
 
+function matchesAnswer(record, sanitizedAnswer) {
+  return record && (record.userAnswer === sanitizedAnswer || redactPii(record.userAnswer).trim() === sanitizedAnswer);
+}
+
 function conflict(interview) {
   const completed = interview?.completed === true;
   return new AppError(ERROR_CODES.QUESTION_CONFLICT, {
@@ -72,7 +76,7 @@ export async function handleInterviewAnswer(request, deps = {}) {
 
     const records = interview.answers ?? [];
     const previous = records[questionNumber - 1];
-    if (previous?.userAnswer === sanitizedAnswer) {
+    if (matchesAnswer(previous, sanitizedAnswer)) {
       return respond(answerResult(interview, previous), 200, 'OK');
     }
     if (interview.completed || interview.currentQuestion !== questionNumber) throw conflict(interview);
@@ -106,7 +110,7 @@ export async function handleInterviewAnswer(request, deps = {}) {
     if (outcome.response) return respond(outcome.response, 200, 'OK');
     const latest = outcome.session?.interview;
     const winner = latest?.answers?.[questionNumber - 1];
-    if (winner?.userAnswer === sanitizedAnswer) {
+    if (matchesAnswer(winner, sanitizedAnswer)) {
       return respond(answerResult(latest, winner), 200, 'OK');
     }
     throw conflict(latest);
