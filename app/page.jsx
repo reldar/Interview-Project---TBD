@@ -192,8 +192,8 @@ function PrivacyNotice({ lang }) {
         <strong>{t('Privasi & penyamaran data', 'Privacy & data masking')}</strong>
         <p>
           {t(
-            'PDF diproses sementara di memori (RAM) saja dan tidak disimpan permanen. Sebelum diproses, sistem menyamarkan 4 jenis data pribadi: email, nomor telepon, NIK/tanggal lahir, dan alamat rumah. Nama atau detail tidak biasa di teks bebas mungkin tetap terbaca.',
-            'Your PDF is processed in memory (RAM) only and never stored permanently. Before analysis, the system masks 4 identifier types: email, phone number, NIK/birthdate, and home address. Names or unusual free-text details may remain.'
+            'PDF diproses sementara di memori (RAM) saja dan tidak disimpan permanen. Sebelum diproses, sistem menyamarkan 4 jenis data pribadi: email, nomor telepon, NIK/tanggal lahir, dan alamat rumah. Gunakan CV dan lowongan fiktif untuk pengujian. Hapus nama dan tautan pribadi sebelum mengirim. Beberapa detail dapat lolos dari penyamaran.',
+            'Your PDF is processed in memory (RAM) only and never stored permanently. Before analysis, the system masks 4 identifier types: email, phone number, NIK/birthdate, and home address. Use fictional CVs and vacancies for testing. Remove names and personal links before submitting. Some identifying details can survive masking.'
           )}
         </p>
       </div>
@@ -387,7 +387,9 @@ export default function Workspace() {
   const [drag, setDrag] = useState(false);
   const [mode, setMode] = useState(null);
   const [realAnalysis, setRealAnalysis] = useState(null);
-  const [stage, setStage] = useState(0);
+  const [realStage, setRealStage] = useState(1);
+  const [exampleStage, setExampleStage] = useState(1);
+  const stage = mode === "real" ? realStage : mode === "example" ? exampleStage : 0;
   const [focusSeq, setFocusSeq] = useState(0);
 
   const picker = useRef(null);
@@ -597,7 +599,7 @@ export default function Workspace() {
         language: submitLang,
       });
       setMode('real');
-      setStage(1);
+      setRealStage(1);
       setFocusSeq((seq) => seq + 1);
     } catch {
       setApiError({
@@ -618,14 +620,13 @@ export default function Workspace() {
 
   function handleOpenExample() {
     setMode('example');
-    setStage(1);
+    setExampleStage(1);
     setFocusSeq((seq) => seq + 1);
   }
 
   function handleBackToReal() {
     if (!realAnalysis) return;
     setMode('real');
-    setStage(1);
     setFocusSeq((seq) => seq + 1);
   }
 
@@ -811,8 +812,8 @@ export default function Workspace() {
                   </div>
                   <p className="inputPrivacyHint">
                     {t(
-                      'PDF diproses di memori (RAM) saja; email, telepon, NIK/tanggal lahir, dan alamat rumah disamarkan otomatis.',
-                      'PDFs are processed in memory (RAM) only; email, phone, NIK/birthdate, and home address are masked automatically.'
+                      'Gunakan data fiktif. Teks CV dan lowongan dikirim ke Gemini setelah penyamaran. Hapus nama dan tautan pribadi yang mungkin masih terbaca. Sesi berakhir 90 menit setelah analisis CV.',
+                      'Use fictional data. Masked CV and vacancy text goes to Gemini. Remove names and personal links that masking may miss. This session expires 90 minutes after CV analysis.'
                     )}
                   </p>
                 </fieldset>
@@ -868,15 +869,18 @@ export default function Workspace() {
                   filename={`LatihKerja-review-${lang}.txt`}
                 />
 
+              </>
+            )}
+            {realAnalysis && (
                 <Interview
+                  active={mode === "real"}
                   key={realAnalysis.sessionId}
                   lang={lang}
                   sessionId={realAnalysis.sessionId}
-                  onStage={setStage}
+                  onStage={setRealStage}
                   onReanalyze={() => submitAnalysis()}
                   analyzing={busy}
                 />
-              </>
             )}
 
             {mode === 'example' && (
@@ -893,7 +897,7 @@ export default function Workspace() {
                   filename={`LatihKerja-${en ? 'example' : 'contoh'}.txt`}
                   onBackToReal={realAnalysis ? handleBackToReal : null}
                 />
-                <Interview key="example" lang={lang} onStage={setStage} />
+                <Interview key="example" lang={lang} onStage={setExampleStage} />
               </>
             )}
           </div>

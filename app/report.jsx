@@ -58,6 +58,7 @@ export function ReportActions({ text, en, filename }) {
 
   return (
     <div className="reportExport">
+      <small>{en ? 'Review personal details before sharing your report.' : 'Periksa detail pribadi sebelum membagikan laporan.'}</small>
       <div className="actions">
         <Button onClick={copy}>{en ? 'Copy' : 'Salin'}</Button>
         <Button onClick={download}>{en ? 'Download .txt' : 'Unduh .txt'}</Button>

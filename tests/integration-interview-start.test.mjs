@@ -89,6 +89,7 @@ test('competing modes and retries converge on the committed question and charge 
   const question = INTERVIEW_FIXTURES.hrd.en.questions[0];
   for (const response of [winner, retry]) {
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-interview-mode'), 'hrd');
     assert.deepEqual(await response.json(), question);
   }
   assert.equal(calls, 1);

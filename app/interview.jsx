@@ -31,7 +31,7 @@ function getInterviewError(status, data) {
   return unavailable;
 }
 
-export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = false }) {
+export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = false, active = true }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState('hrd');
   const [language, setLanguage] = useState(null);
@@ -86,6 +86,8 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
 
       const serverLanguage = response.headers.get('content-language');
       if (SUPPORTED_LANGUAGES.includes(serverLanguage)) setLanguage(serverLanguage);
+      const serverMode = response.headers.get('x-interview-mode');
+      if (serverMode === 'hrd' || serverMode === 'user') setMode(serverMode);
       handleResponse(response, data);
     } catch {
       if (!controller.signal.aborted) setError(unavailable);
@@ -99,12 +101,12 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
     event.preventDefault();
     if (request.current || expired || question || completed) return;
 
+    setLanguage(chosenLanguage);
     if (isExample) {
       setQuestion(INTERVIEW_FIXTURES[mode][chosenLanguage].questions[0]);
       onStage(2);
       return;
     }
-    setLanguage(chosenLanguage);
     submit('start', { mode, language: chosenLanguage }, (response, data) => {
       if (response.status === 409 && data?.error?.completed === true) {
         recoverCompleted(data.error.report);
@@ -122,6 +124,7 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
       setError(unavailable);
       return false;
     }
+    setMode(report.mode);
     setCompleted(true);
     setQuestion(null);
     setResult({ ...report, feedback: report.transcript[INTERVIEW_QUESTION_COUNT - 1].feedback });
@@ -137,6 +140,11 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
     submit('answer', { questionNumber: number, userAnswer: draft }, (response, data) => {
       if (response.status === 409 && data?.error?.code === ERROR_CODES.QUESTION_CONFLICT) {
         const { currentQuestion, completed: serverCompleted } = data.error;
+        if (serverCompleted ? !isInterviewReport(data.error.report)
+          : currentQuestion !== null && !isInterviewQuestion(currentQuestion)) {
+          setError(unavailable);
+          return;
+        }
         if (serverCompleted || currentQuestion?.questionNumber !== number) {
           setConflictDrafts((previous) => ({ ...previous, [number]: draft }));
           setDraft('');
@@ -146,7 +154,9 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
         } else setQuestion(isInterviewQuestion(currentQuestion) ? currentQuestion : null);
         setError({ code: ERROR_CODES.QUESTION_CONFLICT });
       } else if (!response.ok) setError(getInterviewError(response.status, data));
-      else if (!isInterviewFeedback(data?.feedback)
+      else if ((data?.completedReport && !isInterviewReport(data.completedReport))
+        || (data?.resumeQuestion && !isInterviewQuestion(data.resumeQuestion))
+        || !isInterviewFeedback(data?.feedback)
         || (number === INTERVIEW_QUESTION_COUNT
           ? data.nextQuestion !== null || !isInterviewReport(data)
           : !isInterviewQuestion(data.nextQuestion, number + 1))) {
@@ -159,6 +169,7 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
     });
   }
 
+  if (!active) return null;
   const heading = dashboardText('Latihan wawancara', 'Interview practice');
   return (
     <section className="interviewBridge" aria-labelledby="interview-bridge-heading">
@@ -174,6 +185,7 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
         <div lang={chosenLanguage}>
           {question || completed ? (
             <>
+              <p>{mode === 'hrd' ? 'HR' : t('Teknis', 'Technical')} · {chosenLanguage === 'id' ? 'Bahasa Indonesia' : 'English'}</p>
               {question && (
                 <>
                   <div className="interviewProgress">
@@ -197,7 +209,8 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
                 <form onSubmit={answer} aria-busy={pending}>
                   <fieldset disabled={pending}>
                     <label htmlFor="interview-answer">{t('Jawaban kamu', 'Your answer')}</label>
-                    <textarea
+                    <p id="answer-privacy">{t('Gunakan contoh fiktif. Hapus nama, kontak, dan tautan profil. Draf tersedia hingga halaman ditutup atau dimuat ulang. Jawaban yang dikirim diproses Gemini setelah penyamaran.', 'Use fictional examples. Remove names, contact details and profile links. Drafts last until you close or reload this page. Submitted answers go to Gemini after masking.')}</p>
+                    <textarea aria-describedby="answer-privacy"
                       id="interview-answer"
                       rows={5}
                       maxLength={MAX_INTERVIEW_ANSWER_CHARS}
@@ -222,10 +235,14 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
                   <p>{result.feedback.suggestion}</p>
                   {result.nextQuestion && (
                     <Button className="mt-4" variant="default" onClick={() => {
-                      setQuestion(result.nextQuestion);
+                      if (result.completedReport) {
+                        recoverCompleted(result.completedReport);
+                        return;
+                      }
+                      setQuestion(result.resumeQuestion ?? result.nextQuestion);
                       setResult(null);
                     }}>
-                      {t('Pertanyaan berikutnya', 'Next question')}
+                      {result.completedReport ? t('Lihat hasil akhir', 'View completed results') : t('Pertanyaan berikutnya', 'Next question')}
                     </Button>
                   )}
                 </div>
@@ -298,15 +315,16 @@ export function Interview({ lang, sessionId, onStage, onReanalyze, analyzing = f
             <div ref={alert} tabIndex={-1} role="alert" className="alertBanner">
               <p>{retryable
                 ? question
-                  ? t('Jawaban belum bisa dinilai. Draf kamu tersimpan. Coba lagi sesaat lagi.', 'Could not evaluate your answer. Your draft is kept. Try again in a moment.')
+                  ? t('Hasil belum diterima. Coba lagi dengan jawaban yang sama untuk memulihkan umpan balik.', 'Feedback did not arrive. Retry with the same answer to recover any saved feedback.')
                   : t('Wawancara belum bisa dimulai. Pengaturan kamu tersimpan. Coba lagi sesaat lagi.', 'Could not start the interview. Your settings are kept. Try again in a moment.')
                 : error.code === ERROR_CODES.QUESTION_CONFLICT
-                  ? t('Langkah wawancara berubah. Draf kamu tersimpan.', 'The interview step changed. Your draft is kept.')
+                  ? t('Langkah wawancara berubah. Buka draf pertanyaan sebelumnya untuk menyalin jawabanmu.', 'The interview step changed. Open the previous question’s draft to copy your answer.')
                   : error.code === ERROR_CODES.FILE_TOO_LARGE
-                    ? t('Permintaan wawancara terlalu besar.', 'The interview request is too large.')
+                    ? t('Permintaan terlalu besar. Persingkat jawaban lalu kirim kembali.', 'The request is too large. Shorten your answer and submit again.')
                     : getErrorCopy(error.code, chosenLanguage, error)}</p>
               {expired && (
                 <div className="actions">
+                  <p>{t('Salin draf yang ingin disimpan sebelum analisis ulang.', 'Copy any draft you want to keep before starting a new analysis.')}</p>
                   <Button onClick={onReanalyze} disabled={analyzing}>
                     {t('Analisis CV ulang', 'Run a new CV analysis')}
                   </Button>

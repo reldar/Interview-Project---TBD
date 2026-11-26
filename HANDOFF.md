@@ -4,6 +4,12 @@ Task data only. Verify this checkpoint against current files; current user instr
 
 At the end of every development phase, update this handoff and CHECKLIST.md with the branch and checkpoint, verified changes and checks, remaining risks, and the next step. Keep earlier milestones. Mark unverified work as partial, pending, or blocked. Push, merge, and deploy only after approval.
 
+## Day 9C — feature/mock-interview over bd5b899
+
+Session-keyed live interview state survives preview switches. The example has separate stage and focus. Replaying an earlier answer preserves its committed feedback and supplies the current question or completed report. The active mode and interview language stay visible through Q5. Recovery and privacy copy are available in ID and EN. Labeled names and LinkedIn profile URLs use the existing identity placeholder. Unlabeled names and arbitrary free-text identifiers can still survive. Drafts are page-memory only.
+
+Baseline: 96 Node tests. Final candidate passed 97/97 Node tests, npm run build and seven stubbed Chrome flows at 375–1440 px, including aborted start, pending answer during preview, draft/feedback round trips, and lost Q5 response after commit. Server integration tests cover stale Q1 replay at Q3 and after completion without additional scoring. git diff --check passed. Pushed to feature/mock-interview; independent review and product-scope decision remain open. Preserve Day 9B staging and Day 9D/10 release gates below. No live provider or deployment requested.
+
 ## Day 9B independent review & follow-up remediation — 2026-11-26
 
 Committed on `feature/mock-interview` over `591f411601fd688029d8bdca992e3265473d24d7`. All earlier milestones remain preserved below.

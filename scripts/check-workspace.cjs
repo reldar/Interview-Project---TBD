@@ -212,11 +212,16 @@ function extractMultipartRequestId(route) {
       const rawEmail = 'candidate@example.org';
       const longAnswer = `Saya mencatat tahapan — résumé.\n${'Rincian langkah kerja sama. '.repeat(20)}\nEmail: ${rawEmail}`;
       const suggestion = language === 'en' ? 'Explain how you verified the result.' : 'Jelaskan cara kamu memeriksa hasilnya.';
+      let lostFinal;
       let releaseAnswer;
       const heldAnswer = new Promise((resolve) => { releaseAnswer = resolve; });
       await page.route('**/api/interview/answer', async (route) => {
         const body = route.request().postDataJSON();
         answers.push(body);
+        if (lostFinal) {
+          assert.deepEqual(body, answers.at(-2));
+          return route.fulfill({ json: lostFinal });
+        }
         if (answers.length === 1) return width === 375 || width === 768 || width === 1024
           ? route.fulfill({
             status: 429,
@@ -248,19 +253,23 @@ function extractMultipartRequestId(route) {
           feedback,
         });
         const completed = body.questionNumber === 5;
-        await route.fulfill({
-          json: {
+        const payload = {
             feedback,
             nextQuestion: questions[body.questionNumber] ?? null,
             finalSummary: completed ? buildInterviewSummary(committed, language) : null,
             ...(completed ? { mode, transcript: committed } : {}),
-          },
-        });
+        };
+        if (completed && width === 1440) {
+          lostFinal = payload;
+          return route.abort('connectionreset');
+        }
+        await route.fulfill({ json: payload });
       });
       let release;
       const held = new Promise((resolve) => { release = resolve; });
       await page.route('**/api/interview/start', async (route) => {
         starts.push(route.request().postDataJSON());
+        if (starts.length === 1 && width === 375) return route.abort('connectionreset');
         if (starts.length === 1) return route.fulfill({ status: 503, json: { error: { code: 'TEMPORARILY_UNAVAILABLE' } } });
         if (starts.length === 2) return route.fulfill({
           status: 429,
@@ -315,11 +324,17 @@ function extractMultipartRequestId(route) {
       await panel.getByText(en ? 'Question 1 of 5' : 'Pertanyaan 1 dari 5').waitFor();
       assert.equal(await questionHeading.evaluate((node) => node === document.activeElement), true);
       assert.equal(await panel.locator('progress').getAttribute('max'), '5');
+      await panel.getByText((mode === 'hrd' ? 'HR' : en ? 'Technical' : 'Teknis') + ' · ' + (en ? 'English' : 'Bahasa Indonesia'), { exact: true }).waitFor();
       const draft = panel.locator('#interview-answer');
       const submitAnswer = panel.getByRole('button', { name: en ? 'Submit answer' : 'Kirim jawaban' });
       const next = panel.getByRole('button', { name: en ? 'Next question' : 'Pertanyaan berikutnya' });
       const feedbackHeading = panel.getByRole('heading', { name: en ? 'Answer feedback' : 'Umpan balik jawaban' });
       await draft.fill('First answer draft');
+      const openExample = page.getByRole('button', { name: uiEn ? 'Open example' : 'Buka contoh' });
+      const back = page.getByRole('button', { name: uiEn ? 'Back to your CV review' : 'Kembali ke hasil CV kamu' });
+      await openExample.click();
+      await back.click();
+      assert.equal(await draft.inputValue(), 'First answer draft');
       await submitAnswer.click();
       await panel.getByRole('alert').waitFor();
       assert.equal(await draft.inputValue(), 'First answer draft');
@@ -335,9 +350,15 @@ function extractMultipartRequestId(route) {
       await panel.getByRole('status').filter({ hasText: en ? 'Evaluating your answer' : 'Menilai jawaban' }).waitFor();
       assert.equal(await draft.isDisabled(), true);
       await panel.locator('form').dispatchEvent('submit', { bubbles: true, cancelable: true });
+      if (width === 375) await openExample.click();
       releaseAnswer();
+      if (width === 375) await back.click();
       await feedbackHeading.waitFor();
-      assert.equal(await feedbackHeading.evaluate((node) => node === document.activeElement), true);
+      if (width !== 375) assert.equal(await feedbackHeading.evaluate(node => node === document.activeElement), true);
+      await openExample.click();
+      await back.click();
+      await feedbackHeading.waitFor();
+      assert.equal(starts.length, 4);
       await panel.getByText(suggestion).waitFor();
       await panel.getByText(en ? 'Clarity 4/5' : 'Kejelasan 4/5').waitFor();
       await panel.getByText(en ? 'Relevance 5/5' : 'Relevansi 5/5').waitFor();
@@ -347,8 +368,14 @@ function extractMultipartRequestId(route) {
 
       for (let number = 2; number <= 5; number += 1) {
         await panel.getByRole('heading', { name: questions[number - 1].questionText }).waitFor();
+        await panel.getByText((mode === 'hrd' ? 'HR' : en ? 'Technical' : 'Teknis') + ' · ' + (en ? 'English' : 'Bahasa Indonesia'), { exact: true }).waitFor();
         await draft.fill(number === 5 ? longAnswer : `Draft for question ${number}`);
         await submitAnswer.click();
+        if (number === 5 && width === 1440) {
+          await retry.waitFor();
+          assert.equal(await draft.inputValue(), longAnswer);
+          await retry.click();
+        }
         if (number === 2 && width === 375) {
           await panel.getByRole('heading', { name: questions[2].questionText }).waitFor();
           assert.equal(await draft.inputValue(), '');
@@ -408,7 +435,7 @@ function extractMultipartRequestId(route) {
       }));
       await copy.click();
       assert.equal(await report.locator('.copyFallback').inputValue(), fileText);
-      assert.deepEqual(answers.map((body) => body.questionNumber), [1, 1, 2, 3, 4, 5]);
+      assert.deepEqual(answers.map((body) => body.questionNumber), width === 1440 ? [1, 1, 2, 3, 4, 5, 5] : [1, 1, 2, 3, 4, 5]);
       assert.deepEqual(answers[0], answers[1]);
       assert.ok(answers.every((body) => body.sessionId === `${sessionId}_2`));
       assert.equal(await page.locator('[role="meter"]').getAttribute('aria-valuenow'), '76');
@@ -426,7 +453,7 @@ function extractMultipartRequestId(route) {
       if (process.env.SCREENSHOT_DIR) {
         await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, `latih-front-${width}.png`) });
       }
-      console.log('passed-interview-day8', width, language, mode);
+      console.log('passed-interview-day9c', width, language, mode);
       await page.close();
     }
 

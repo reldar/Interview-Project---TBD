@@ -61,6 +61,12 @@ for (const mode of ['hrd', 'user']) {
         assert.equal(response.status, 200);
         assert.equal(response.headers.get('content-language'), language);
         last = await response.json();
+        if (n === 2 || n === 5) {
+          const recovered = await (await answer(1, 'Answer 1', provider)).json();
+          assert.deepEqual(recovered.feedback, fixture);
+          if (n === 2) assert.deepEqual(recovered.resumeQuestion, questions[2]);
+          else assert.deepEqual(recovered.completedReport.transcript, last.transcript);
+        }
         if (n < 5) {
           assert.deepEqual(last, { feedback: fixture, nextQuestion: questions[n], finalSummary: null });
         }

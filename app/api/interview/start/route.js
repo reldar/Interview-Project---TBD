@@ -52,7 +52,7 @@ export async function handleInterviewStart(request, deps = {}) {
     const { questionNumber, questionText, focusArea } = question;
     log({ route: ROUTE, status: 200, code: 'OK', elapsedMs: Date.now() - startedAt });
     return Response.json({ questionNumber, questionText, focusArea }, {
-      headers: { ...HEADERS, 'content-language': interviewLanguage },
+      headers: { ...HEADERS, 'content-language': interviewLanguage, 'x-interview-mode': interview.mode },
     });
   } catch (err) {
     const appError = err instanceof AppError ? err : new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);

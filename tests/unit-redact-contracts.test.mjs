@@ -715,3 +715,12 @@ describe('Input & Analysis Contracts (§§4, 5, 7) — lib/contracts.js', () => 
     );
   });
 });
+
+it('masks labeled names and LinkedIn profiles while retaining surrounding job evidence', () => {
+  const value = redactPii('Nama lengkap: Rina Contoh | Python engineer\nLinkedIn: https://linkedin.com/in/rina-contoh SQL');
+  assert.doesNotMatch(value, /rina|contoh/i);
+  assert.match(value, /Python engineer/);
+  assert.match(value, /SQL/);
+  assert.match(redactPii('Name: Rina Test, Skills: SQL'), /Skills: SQL/);
+  assert.match(redactPii('Nama: Rina Test\tPython'), /Python/);
+});

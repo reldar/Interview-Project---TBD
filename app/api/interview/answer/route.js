@@ -32,6 +32,9 @@ function answerResult(interview, record) {
   return {
     feedback: record.feedback,
     nextQuestion: questionAt(interview, record.questionNumber + 1),
+    ...(interview.completed ? { completedReport: getCompletedInterviewReport(interview) }
+      : interview.currentQuestion > record.questionNumber + 1
+        ? { resumeQuestion: questionAt(interview, interview.currentQuestion) } : {}),
     finalSummary: null,
   };
 }
