@@ -6,13 +6,14 @@ import {
   ERROR_CODES,
   MAX_MULTIPART_OVERHEAD_BYTES,
   MAX_PDF_BYTES,
+  validateAnalysisPayload,
   validateCvText,
   validateJobDescription,
   validateLanguage,
 } from '../../../lib/contracts.js';
 import { logRouteEvent } from '../../../lib/logger.js';
 import { extractPdfText } from '../../../lib/pdf.js';
-import { redactPii } from '../../../lib/redact.js';
+import { redactAnalysisOutput, redactLegacyPii } from '../../../lib/redact.js';
 import { deriveIpHash, getStore } from '../../../lib/store.js';
 import { readBoundedBytes, readBoundedJson } from '../../../lib/request-body.js';
 import { budgetedGeminiProvider, getAiBudgetLimits, requireAiBudget } from '../../../lib/ai-budget.js';
@@ -53,6 +54,18 @@ function buildErrorJson(appErr) {
     }
   }
   return Response.json({ error: errorObj }, { status: appErr.status });
+}
+
+async function cachedAnalysisResponse(cache, store) {
+  const { validationVersion, sessionId, ...analysis } = cache;
+  if (validationVersion === 1) return Response.json({ sessionId, ...analysis });
+
+  // A record issued before this validator can still be within its replay TTL.
+  const session = await store.getSession(sessionId);
+  const validated = session && validateAnalysisPayload(redactAnalysisOutput(analysis, redactLegacyPii),
+    redactLegacyPii(session.sanitizedCvText), { sanitizedJd: redactLegacyPii(session.sanitizedJd) });
+  if (!validated?.ok) throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
+  return Response.json({ sessionId, ...validated.value });
 }
 
 export async function handleAnalyzeCv(request, deps = {}) {
@@ -164,13 +177,13 @@ export async function handleAnalyzeCv(request, deps = {}) {
 
     activeStore = deps.store ?? getStore();
     const ipHash = deriveIpHash(request, deps.ipSecret, deps.env);
-    const sanitizedJd = redactPii(rawJobDescription);
+    const sanitizedJd = redactLegacyPii(rawJobDescription);
     rawJobDescription = null;
     let fileBytes = file ? new Uint8Array(await file.arrayBuffer()) : null;
     file = null;
     const fingerprint = createHmac('sha256', ipHash)
       .update(JSON.stringify([transport, language, sanitizedJd]))
-      .update(fileBytes ?? redactPii(rawCvText))
+      .update(fileBytes ?? redactLegacyPii(rawCvText))
       .digest('hex');
     const limits = getAiBudgetLimits(deps.env);
     const intake = await activeStore.claimCvAdmission({
@@ -181,8 +194,9 @@ export async function handleAnalyzeCv(request, deps = {}) {
       logicalId: requestId ? createHmac('sha256', ipHash).update(JSON.stringify([requestId, language, sanitizedJd])).digest('hex') : '',
     });
     if (intake.status === 'cached') {
+      const cached = await cachedAnalysisResponse(intake.result, activeStore);
       log({ route: '/api/analyze-cv', status: 200, code: 'OK', elapsedMs: now() - startedAt, meta: { transport, language, cached: true } });
-      return Response.json(intake.result);
+      return cached;
     }
     if (Object.hasOwn(CV_QUOTA_ACTIONS, intake.status)) throw admissionError(intake);
     if (intake.status !== 'claimed') throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
@@ -198,7 +212,7 @@ export async function handleAnalyzeCv(request, deps = {}) {
       rawCvText = cvCheck.value;
     }
 
-    const sanitizedCvText = redactPii(rawCvText);
+    const sanitizedCvText = redactLegacyPii(rawCvText);
     rawCvText = null;
 
     if (!sanitizedCvText.trim()) {
@@ -218,8 +232,9 @@ export async function handleAnalyzeCv(request, deps = {}) {
       const cached = await activeStore.getIdempotentResult({ action: 'analyze', ipHash, requestId: effectiveRequestId });
       if (!cached) throw admissionError(intake.denial);
       chargeAdmission = false;
+      const response = await cachedAnalysisResponse(cached, activeStore);
       log({ route: '/api/analyze-cv', status: 200, code: 'OK', elapsedMs: now() - startedAt, meta: { transport, language, cached: true } });
-      return Response.json(cached);
+      return response;
     }
     const reservation = await activeStore.reserveQuota({
       action: 'analyze',
@@ -229,6 +244,7 @@ export async function handleAnalyzeCv(request, deps = {}) {
     });
 
     if (reservation.cached) {
+      const response = await cachedAnalysisResponse(reservation.cached, activeStore);
       log({
         route: '/api/analyze-cv',
         status: 200,
@@ -242,7 +258,7 @@ export async function handleAnalyzeCv(request, deps = {}) {
           storeBackend: activeStore.backend,
         },
       });
-      return Response.json(reservation.cached, { status: 200 });
+      return response;
     }
 
     if (!reservation.allowed) {
@@ -269,6 +285,7 @@ export async function handleAnalyzeCv(request, deps = {}) {
 
       const session = await activeStore.createSession({
         language,
+        nameMaskVersion: 1,
         sanitizedCvText,
         sanitizedJd,
         analysis: {
@@ -292,7 +309,7 @@ export async function handleAnalyzeCv(request, deps = {}) {
         action: 'analyze',
         ipHash,
         requestId: effectiveRequestId,
-        result: responsePayload,
+        result: { ...responsePayload, validationVersion: 1 },
         session,
         admission,
       });

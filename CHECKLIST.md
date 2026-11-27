@@ -4,6 +4,33 @@ At the end of each development phase, update this checklist and HANDOFF.md with 
 
 Source: [guideline.md](guideline.md), sections 1–12. Open boxes represent remaining work. “Proposed” identifies working defaults or review suggestions that still need team agreement. A owns backend and AI, B owns frontend and UX, and both own the deployed walkthrough.
 
+## Paused checkpoint after independent security review
+
+**Local remediation HOLD. Staging HOLD. Production HOLD.** This development checkpoint is based on `feature/mock-interview` at `b728e152f9ffb97fbe2cb6fb2dcac90918d9c743`. The latest independent audit supersedes the earlier pending-review entries.
+
+- [x] Implement ATS grounding, legacy CV cache validation, labeled-name masking, and legacy interview report masking. Preserve the implementation and regression tests in this checkpoint.
+- [x] Independently rerun **143/143** automated tests with zero failures or skips, plus the build, private Redis, offline PDFs, exact PDF boundaries, both Chrome suites, benchmark, credential scans, and whitespace checks.
+- [x] Record the failed independent security review. Both local High remediation gates remain on HOLD.
+- [ ] **Next milestone.** Reassess ATS claim provenance, structured quantities, explanation premises, and legacy cache validation. Reassess labeled-field boundaries, preserving work evidence, and masking before provider dispatch and on legacy reads. Agree on a design and acceptance criteria before implementation.
+- [ ] Resolve the High ATS findings covering unsupported responsibility and explanations, quantity and currency parsing, subject and bound changes, direction, cadence, and polarity.
+- [ ] Resolve the High privacy finding covering names surviving provider input, storage, replay, Q5, and export.
+- [ ] Resolve the Medium findings covering erased interview evidence, legitimate and bilingual CV rewrites, wrapped PDF spans, mixed and negated vacancy requirements, equivalent CV retry with a quota hold and budget exhaustion, and shared replay keys for Redis-backed local workers.
+- [ ] Carry forward the identifier-only and harness coverage findings. Repeat the local matrix and obtain a fresh independent review before changing the local HOLD.
+- [ ] Resolve the High Vercel transport decision for 5,000,000-byte PDFs. Where separately authorized, verify deployed ingress and exact boundaries, trusted identity, hosted Upstash replay and cross-instance quotas, live Gemini behavior and retention settings, and the deployed verification matrix.
+
+Resume with the findings, line references, and ordered instructions in [HANDOFF.md](HANDOFF.md#development-checkpoint-after-independent-security-review).
+
+## High-severity remediation awaiting independent review
+
+**Staging and production on HOLD.** Work is uncommitted on `feature/mock-interview` over `b728e152f9ffb97fbe2cb6fb2dcac90918d9c743`. See HANDOFF.md for the changed files, root causes, verification run, and reviewer instructions.
+
+- [x] Reproduce the grounding and labeled-name failures in tests before changing the affected paths. Retain all 107 baseline tests and assertions.
+- [x] Check ATS rewrite and explanation claims against their source bullet. Bind bilingual quantities to the action, subject, unit or currency, polarity, and bounds. Preserve neutral questions. Exercise invalid output and legacy cache validation without a session commit, success-quota charge, or extra provider validation call.
+- [x] Preserve substantive prose after supported labeled names, including Indonesian titles and trailing initials. Test idempotency, bounded scanning, provider prompts, committed records, keyed replay, legacy report reads, and UTF-8 export. Keep existing records in place.
+- [x] Run the local matrix. **143/143 Node tests**, production build, **10/10** private Redis groups, **16/16** offline PDFs, **3/3** parser boundaries, **7/7** real-route Chrome assertions, **7/7** workspace Chrome flows, benchmark, credential and privacy checks, and whitespace checks passed. Local HTTP and Chrome preserved the 5,000,000-byte contract.
+- [ ] Independently review both High findings, including new bilingual variants and masked legacy replay and exports. Deterministic rules have limited language coverage, and free text can still contain identifiers.
+- [ ] Leave the staging High open until both developers agree on Vercel transport and separately authorize deployed ingress testing. Keep the wrapped-PDF, bilingual, vacancy, combined quota and budget replay, local Redis replay key, identifier-only, and harness findings open.
+
 ## Development checkpoint before pause · 2026-11-26
 
 **Local remediation: HOLD. Staging readiness: HOLD.** The latest independent suite passed **107/107 tests**. The completed remediation, verification results and unresolved findings are preserved below. [Detailed resume instructions](HANDOFF.md#development-checkpoint-before-pause--2026-11-26)

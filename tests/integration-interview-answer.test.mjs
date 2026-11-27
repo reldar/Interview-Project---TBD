@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { handleInterviewAnswer } from '../app/api/interview/answer/route.js';
 import { handleInterviewStart } from '../app/api/interview/start/route.js';
 import { INTERVIEW_FIXTURES } from '../lib/interview-fixtures.js';
+import { buildInterviewReportText } from '../lib/interview-report.js';
 import { logRouteEvent } from '../lib/logger.js';
 import {
   createMemoryStore, createUpstashStore, INTERVIEW_GENERATION_LEASE_MS, INTERVIEW_ATTEMPT_WINDOW_MS,
@@ -401,4 +402,69 @@ test('answer replay is bound to the submission and preserves English and Indones
     assert.equal((await store.updateSession(sessionId, version, { interview: { ...interview, answers: [ambiguous] } })).ok, true);
     assert.equal((await answer(1, original, failure)).status, 409);
   }
+});
+
+for (const [language, raw, marker, evidence] of [
+  ['id', 'Nama: Ir. Re\u0301nata Fiksiana. Saat magang, saya menyusun laporan.', /Rénata|Fiksiana/u, 'Saat magang, saya menyusun laporan.'],
+  ['en', 'Name: Fictora K. My internship involved testing dashboards.', /Fictora/u, 'My internship involved testing dashboards.'],
+]) {
+  test(`name masking preserves evidence through scoring, replay and UTF-8 export (${language})`, async () => {
+    const { answer, start, store, sessionId, session } = await setup({ language });
+    const submitted = `${raw}\nExcel`;
+    const prompts = [];
+    const logs = [];
+    const provider = { async generateStructuredResponse({ userPrompt }) {
+      prompts.push(userPrompt);
+      return JSON.stringify(feedback);
+    } };
+    const first = await answer(1, submitted, provider, (event) => logs.push(event));
+    assert.equal(first.status, 200);
+    assert.equal(prompts.length, 1);
+    const stored = await store.getSession(sessionId);
+    assert.doesNotMatch(prompts[0], marker);
+    assert.ok(prompts[0].includes(evidence));
+    assert.doesNotMatch(stored.interview.answers[0].userAnswer, marker);
+    assert.ok(stored.interview.answers[0].userAnswer.includes(evidence));
+    const noGeneration = { generateStructuredResponse() { assert.fail('unexpected scoring'); } };
+    const retry = await answer(1, ` ${submitted.normalize('NFC').replaceAll('\n', '\r\n')} `, noGeneration);
+    assert.deepEqual(await retry.json(), await first.json());
+    assert.equal(retry.status, 200);
+    assert.equal((await answer(1, `${raw}\nSQL`, noGeneration)).status, 409);
+    assert.equal((await answer(2, raw.split(evidence)[0], noGeneration)).status, 400);
+    for (let q = 2; q < 5; q += 1) assert.equal((await answer(q)).status, 200);
+    const last = await answer(5);
+    assert.equal(last.status, 200);
+    const report = await last.json();
+    assert.doesNotMatch(JSON.stringify(report), marker);
+    const utf8 = new TextDecoder('utf-8', { fatal: true }).decode(new TextEncoder().encode(buildInterviewReportText(report, language)));
+    assert.doesNotMatch(utf8, marker);
+    assert.ok(utf8.includes(evidence));
+    assert.doesNotMatch(utf8, /sess_|answerReplayHash/);
+    assert.doesNotMatch(JSON.stringify(logs), marker);
+    const cached = await answer(1, submitted, noGeneration);
+    assert.equal(cached.status, 200);
+    assert.deepEqual((await cached.json()).completedReport.transcript, report.transcript);
+    assert.deepEqual((await (await start()).json()).error.report.transcript, report.transcript);
+    assert.equal((await store.getSession(sessionId)).expiresAt, session.expiresAt);
+  });
+}
+
+test('a completed legacy interview masks exposed labeled-name suffixes before replay and export', async () => {
+  const { answer, start, store, sessionId } = await setup({ language: 'id' });
+  const raw = 'Nama: Ir. Fiksiana Contoh. Saat magang, saya menyusun laporan.';
+  const exposed = 'Nama: [IDENTITY_REDACTED]. Fiksiana Contoh. Saat magang, saya menyusun laporan.';
+  for (let q = 1; q <= 5; q += 1) assert.equal((await answer(q, 'Saya menyusun laporan.')).status, 200);
+  const saved = await store.getSession(sessionId);
+  const answers = [...saved.interview.answers];
+  answers[0] = { questionNumber: 1, userAnswer: exposed, feedback: { ...feedback, suggestion: exposed } };
+  const finalSummary = { ...saved.interview.finalSummary, nextSteps: [exposed] };
+  assert.equal((await store.updateSession(sessionId, saved.version, { interview: { ...saved.interview, answers, finalSummary } })).ok, true);
+  const replay = await answer(1, raw, { generateStructuredResponse() { assert.fail('legacy replay must skip scoring'); } });
+  assert.equal(replay.status, 200);
+  const report = (await replay.json()).completedReport;
+  assert.doesNotMatch(JSON.stringify(report), /Fiksiana|Contoh/);
+  assert.doesNotMatch(JSON.stringify(await (await start()).json()), /Fiksiana|Contoh/);
+  assert.match(report.transcript[0].userAnswer, /Saat magang, saya menyusun laporan\./);
+  assert.doesNotMatch(buildInterviewReportText(report, 'id'), /Fiksiana|Contoh/);
+  assert.equal((await store.getSession(sessionId)).interview.answers[0].userAnswer, exposed);
 });

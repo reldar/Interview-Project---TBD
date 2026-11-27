@@ -454,6 +454,39 @@ test('count, percentage, duration, action and scope stay bound in bilingual rewr
   }
 });
 
+for (const [label, original, improved, reason, expected] of [
+  ['report action changes', 'Received 12 reports in Excel.', 'Prepared 12 reports in Excel.', 'Clarifies the action.', false],
+  ['report action translates', 'Received 12 reports in Excel.', 'Menerima dua belas laporan di Excel.', 'Memperjelas tindakan.', true],
+  ['currency changes', 'Budgeted EUR 12 for a Python workshop.', 'Budgeted GBP 12 for a Python workshop.', 'Clarifies scope.', false],
+  ['currency stays bound', 'Budgeted EUR 12 for a Python workshop.', 'Menganggarkan 12 EUR untuk lokakarya Python.', 'Memperjelas anggaran.', true],
+  ['spelled percent and outcome are invented', 'Built a Python dashboard to summarize invoices.', 'Built a Python dashboard to summarize invoices and improved profit margins by fifty percent.', 'Clarifies the action.', false],
+  ['spelled Indonesian count is invented', 'Menyusun laporan di Excel.', 'Menyusun dua belas laporan di Excel.', 'Memperjelas tindakan.', false],
+  ['supported spelled percent translates', 'Reduced invoice errors by 12 percent in Excel.', 'Mengurangi kesalahan faktur sebesar dua belas persen di Excel.', 'Memperjelas hasil.', true],
+  ['unrelated clause shares tool', 'Built a Python dashboard to summarize invoices.', 'Built a Python dashboard to summarize invoices and secured a partnership.', 'Clarifies the action.', false],
+  ['shared action has a new subject', 'Reviewed Excel reporting data.', 'Reviewed Excel payroll data.', 'Clarifies the action.', false],
+  ['negated source does not support a positive count', 'Reviewed Excel reports without processing 12 invoices.', 'Reviewed Excel reports and processed 12 invoices.', 'Clarifies the action.', false],
+  ['negated action stays negated even without a count', 'Never received invoice reports in Excel.', 'Received invoice reports in Excel.', 'Clarifies the action.', false],
+  ['negated action translates', 'Never received invoice reports in Excel.', 'Tidak pernah menerima laporan faktur di Excel.', 'Memperjelas tindakan.', true],
+  ['bounded count does not become an exact count', 'Reviewed up to 12 reports in Excel.', 'Reviewed 12 reports in Excel.', 'Clarifies the action.', false],
+  ['hypothetical source does not support actual results', 'Built an Excel dashboard to reduce invoice errors.', 'Built an Excel dashboard and reduced invoice errors.', 'Clarifies the action.', false],
+  ['coordinated actions keep their subjects without quantities', 'Reviewed invoice data and processed payroll data in Excel.', 'Reviewed payroll data and processed invoice data in Excel.', 'Clarifies the action.', false],
+  ['same value and unit cannot switch entities', 'Prepared 12 sales reports and reviewed 12 audit reports in Excel.', 'Prepared 12 audit reports and reviewed 12 sales reports in Excel.', 'Clarifies the action.', false],
+  ['explanation invents an outcome', 'Built a Python dashboard to summarize invoices.', 'Developed a Python dashboard to summarize invoices.', 'This reflects a verified 70% reduction in invoice errors.', false],
+  ['explanation invents a qualitative outcome in Indonesian', 'Menyusun laporan di Excel.', 'Membuat laporan di Excel.', 'Anda berhasil memperoleh kontrak baru.', false],
+  ['explanation asks for missing evidence', 'Received reports in Excel.', 'Received reports using Excel.', 'Clarifies the action. How many reports did you receive?', true],
+  ['explanation invites evidence in Indonesian', 'Menyusun laporan di Excel.', 'Membuat laporan di Excel.', 'Tambahkan jumlah laporan jika diketahui.', true],
+  ['neutral request asks for missing dataset size across languages', 'Built a Python script to clean duplicate rows.', 'Mengembangkan skrip Python untuk membersihkan baris duplikat.', 'Tambahkan ukuran dataset jika diketahui.', true],
+  ['explanation question presupposes a reduction', 'Menyusun laporan di Excel.', 'Membuat laporan di Excel.', 'Bagaimana Anda berhasil menurunkan jumlah kesalahan faktur?', false],
+  ['assertion after neutral question is still checked', 'Reviewed Excel reports.', 'Reviewed reports in Excel.', 'How many reports did you review? This cut losses by half.', false],
+]) {
+  test(`ATS factual grounding: ${label}`, () => {
+    const result = validateAnalysisPayload({ atsScore: 35, matchedKeywords: [], missingKeywords: [],
+      rewrites: [{ original, improved, reason }],
+    }, `- ${original}`);
+    assert.equal(result.ok, expected, result.reason ?? 'Claim was accepted');
+  });
+}
+
 test('negated CV evidence and ordinary go wording do not satisfy required tools', () => {
   const cv = 'I have no experience with Python, but I used Excel. I go to the office weekly.';
   const options = { sanitizedJd: 'Python, Excel and Go are required.' };

@@ -3,13 +3,12 @@ import {
   AppError,
   ERROR_CODES,
   INTERVIEW_QUESTION_COUNT,
-  isInterviewQuestion,
   validateInterviewAnswerRequest,
 } from '../../../../lib/contracts.js';
-import { generateInterviewFeedback, getCompletedInterviewReport, withInterviewGeneration } from '../../../../lib/interview.js';
+import { generateInterviewFeedback, getCompletedInterviewReport, interviewAnswerFeedback, interviewQuestionAt, withInterviewGeneration } from '../../../../lib/interview.js';
 import { buildInterviewSummary, isInterviewSummary } from '../../../../lib/interview-report.js';
 import { logRouteEvent } from '../../../../lib/logger.js';
-import { REDACTION_PLACEHOLDERS, redactPii } from '../../../../lib/redact.js';
+import { REDACTION_PLACEHOLDERS, redactLegacyPii } from '../../../../lib/redact.js';
 import { deriveIpHash, getStore } from '../../../../lib/store.js';
 import { readBoundedJson } from '../../../../lib/request-body.js';
 import { budgetedGeminiProvider, getAiBudgetLimits, requireAiBudget } from '../../../../lib/ai-budget.js';
@@ -18,25 +17,19 @@ export const runtime = 'nodejs';
 const ROUTE = '/api/interview/answer';
 const localReplaySecret = randomBytes(32);
 
-function questionAt(interview, number) {
-  const question = interview.questions[number - 1];
-  if (!isInterviewQuestion(question, number)) throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
-  const { questionNumber, questionText, focusArea } = question;
-  return { questionNumber, questionText, focusArea };
-}
-
 function answerResult(interview, record) {
+  const feedback = interviewAnswerFeedback(record);
   if (record.questionNumber === INTERVIEW_QUESTION_COUNT) {
     const report = getCompletedInterviewReport(interview);
     if (!report) throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
-    return { feedback: record.feedback, nextQuestion: null, ...report };
+    return { feedback, nextQuestion: null, ...report };
   }
   return {
-    feedback: record.feedback,
-    nextQuestion: questionAt(interview, record.questionNumber + 1),
+    feedback,
+    nextQuestion: interviewQuestionAt(interview, record.questionNumber + 1),
     ...(interview.completed ? { completedReport: getCompletedInterviewReport(interview) }
       : interview.currentQuestion > record.questionNumber + 1
-        ? { resumeQuestion: questionAt(interview, interview.currentQuestion) } : {}),
+        ? { resumeQuestion: interviewQuestionAt(interview, interview.currentQuestion) } : {}),
     finalSummary: null,
   };
 }
@@ -51,7 +44,7 @@ function matchesAnswer(record, replayHash, sanitizedAnswer) {
   if (!record) return false;
   if (record.answerReplayHash !== undefined) return record.answerReplayHash === replayHash;
   // Legacy records can replay only when the newly masked submission preserves the recorded evidence.
-  const previous = redactPii(record.userAnswer).trim();
+  const previous = redactLegacyPii(record.userAnswer).trim();
   return hasAnswerEvidence(previous) && previous === sanitizedAnswer;
 }
 
@@ -59,7 +52,7 @@ function conflict(interview) {
   const completed = interview?.completed === true;
   return new AppError(ERROR_CODES.QUESTION_CONFLICT, {
     completed,
-    currentQuestion: interview && !completed ? questionAt(interview, interview.currentQuestion) : null,
+    currentQuestion: interview && !completed ? interviewQuestionAt(interview, interview.currentQuestion) : null,
     report: completed ? getCompletedInterviewReport(interview) : null,
   });
 }
@@ -77,7 +70,7 @@ export async function handleInterviewAnswer(request, deps = {}) {
     const body = await readBoundedJson(request, 32_768);
     const { sessionId, questionNumber, userAnswer } = validateInterviewAnswerRequest(body);
     const normalizedAnswer = userAnswer.replace(/\r\n?/g, '\n').normalize('NFC').trim();
-    const sanitizedAnswer = redactPii(normalizedAnswer).trim();
+    const sanitizedAnswer = redactLegacyPii(normalizedAnswer).trim();
     if (!hasAnswerEvidence(sanitizedAnswer)) throw new AppError(ERROR_CODES.INVALID_INPUT, { field: 'userAnswer' });
 
     const store = deps.store ?? getStore();
@@ -106,11 +99,11 @@ export async function handleInterviewAnswer(request, deps = {}) {
       const feedback = await generateInterviewFeedback({
         mode: interview.mode,
         language: interview.language,
-        question: questionAt(interview, questionNumber),
-        sanitizedJd: session.sanitizedJd,
+        question: interviewQuestionAt(interview, questionNumber),
+        sanitizedJd: session.nameMaskVersion === 1 ? session.sanitizedJd : redactLegacyPii(session.sanitizedJd),
         userAnswer: sanitizedAnswer,
       }, deps.provider ?? budgetedGeminiProvider(store, limits, claim, deps.geminiOptions));
-      const record = { questionNumber, userAnswer: sanitizedAnswer, answerReplayHash: replayHash, feedback };
+      const record = { questionNumber, userAnswer: sanitizedAnswer, answerReplayHash: replayHash, feedback, nameMaskVersion: 1 };
       const completed = questionNumber === INTERVIEW_QUESTION_COUNT;
       const nextInterview = {
         ...interview,
@@ -119,7 +112,10 @@ export async function handleInterviewAnswer(request, deps = {}) {
         completed,
       };
       if (completed) {
-        nextInterview.finalSummary = buildInterviewSummary(nextInterview.answers, interview.language);
+        nextInterview.finalSummary = buildInterviewSummary(nextInterview.answers.map((answer) => ({
+          ...answer, feedback: interviewAnswerFeedback(answer),
+        })), interview.language);
+        nextInterview.summaryNameMaskVersion = 1;
         if (!isInterviewSummary(nextInterview.finalSummary)) throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
       }
       return { interview: nextInterview, response: answerResult(nextInterview, record) };

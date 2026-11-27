@@ -275,6 +275,57 @@ describe('Integration — POST /api/analyze-cv & POST /api/feedback', () => {
     assert.equal(stats.createSessionCalls, 2);
   });
 
+  for (const [language, reason] of [
+    ['en', 'This change reflects the verified 70% reduction in invoice errors.'],
+    ['id', 'Perubahan ini membuktikan penurunan kesalahan faktur sebesar lima puluh persen.'],
+  ]) {
+    it(`rejects unsupported ATS explanations before committing analysis (${language})`, async () => {
+      const { store, stats } = createTrackedStore();
+      const fixture = FIXTURES[language];
+      const payload = { cvText: fixture.cvText, jobDescription: fixture.jobDescription, language, requestId: 'reason-test' };
+      const invalid = structuredClone(fixture.response);
+      invalid.rewrites[0].reason = reason;
+      let calls = 0;
+      const attempt = (output) => handleAnalyzeCv(makeJsonRequest({ payload }), {
+        store, logger: () => {},
+        provider: async () => { calls += 1; return JSON.stringify(output); },
+      });
+      const rejected = await attempt(invalid);
+      assert.equal(calls, 1);
+      assert.equal(rejected.status, 503);
+      assert.deepEqual(await rejected.json(), { error: { code: ERROR_CODES.TEMPORARILY_UNAVAILABLE } });
+      assert.equal(stats.createSessionCalls, 0);
+      assert.equal(stats.commitCalls, 0);
+      assert.equal(stats.releaseCalls, 1);
+      const accepted = await attempt(fixture.response);
+      assert.equal(accepted.status, 200);
+      const result = await accepted.json();
+      assert.equal(stats.commitCalls, 1);
+      assert.doesNotMatch(buildCvReportText(result, language), /70%|lima puluh persen/);
+      assert.deepEqual(await (await attempt(invalid)).json(), result);
+      assert.equal(calls, 2);
+    });
+  }
+
+  it('revalidates legacy cached analysis before returning it without a new provider call', async () => {
+    const { cvText, jobDescription, response } = FIXTURES.en;
+    const store = createMemoryStore();
+    const { sessionId } = await store.createSession({ sanitizedCvText: cvText, sanitizedJd: jobDescription, language: 'en' });
+    const cached = structuredClone({ ...response, sessionId });
+    const attempt = () => handleAnalyzeCv(makeJsonRequest({
+      payload: { cvText, jobDescription, language: 'en', requestId: 'legacy' },
+    }), { store: { ...store, claimCvAdmission: async () => ({ status: 'cached', result: cached }) },
+      provider: () => assert.fail('cached analysis cannot dispatch'), logger: () => {},
+    });
+    const first = await attempt();
+    assert.equal(first.status, 200);
+    assert.deepEqual(await first.json(), cached);
+    cached.rewrites[0].reason = 'Name: [IDENTITY_REDACTED]. Fiksiana Contoh. This reflects 70% fewer errors.';
+    const unsafe = await attempt();
+    assert.equal(unsafe.status, 503);
+    assert.deepEqual(await unsafe.json(), { error: { code: ERROR_CODES.TEMPORARILY_UNAVAILABLE } });
+  });
+
   it('rejects all invalid inputs & unreadable PDFs with 0 provider calls, 0 quota used, and 0 sessions created', async () => {
     const validPdf = await readFile(path.join(fixtureDir, manifest.readable[0].filename));
     const mislabeledPdf = await readFile(path.join(fixtureDir, 'invalid-mislabeled.pdf'));

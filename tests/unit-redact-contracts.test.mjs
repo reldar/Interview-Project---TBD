@@ -736,3 +736,23 @@ it('masks labeled names through initials and preserves the next sentence in both
     assert.equal(redactPii(expected), expected);
   }
 });
+
+for (const [input, expected] of [
+  ['Nama: Ir. Rénata Fiksiana. Saat magang, saya menyusun laporan.', 'Nama: [IDENTITY_REDACTED]. Saat magang, saya menyusun laporan.'],
+  ['Nama: dr. Ir. R. Fiksiana K. Proyek ini mencakup pengujian dasbor.', 'Nama: [IDENTITY_REDACTED]. Proyek ini mencakup pengujian dasbor.'],
+  ['Name: Fictora K. My internship involved testing dashboards.', 'Name: [IDENTITY_REDACTED]. My internship involved testing dashboards.'],
+  ['Name: Dr. A. B. Fictora. Tested dashboards.\r\nSkills: Excel', 'Name: [IDENTITY_REDACTED]. Tested dashboards.\nSkills: Excel'],
+  ['Nama: Ir. Fiksiana\tKeterampilan: SQL | Python', 'Nama: [IDENTITY_REDACTED]\tKeterampilan: SQL | Python'],
+  ['Name: Prof. Fictora K. Reviewed Excel reports.', 'Name: [IDENTITY_REDACTED]. Reviewed Excel reports.'],
+]) {
+  it(`keeps labeled-name boundaries and is idempotent (${expected.slice(-35)})`, () => {
+    assert.equal(redactPii(input), expected);
+    assert.equal(redactPii(expected), expected);
+  });
+}
+
+it('masks a long labeled name field and retains evidence in the next field', () => {
+  const name = 'F'.repeat(29_000);
+  const input = `Nama: ${name}\tKeterampilan: SQL`;
+  assert.equal(redactPii(input), 'Nama: [IDENTITY_REDACTED]\tKeterampilan: SQL');
+});

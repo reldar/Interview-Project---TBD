@@ -1,9 +1,10 @@
-import { AppError, ERROR_CODES, isInterviewQuestion, validateInterviewStartRequest } from '../../../../lib/contracts.js';
-import { generateInterviewQuestions, getCompletedInterviewReport, withInterviewGeneration } from '../../../../lib/interview.js';
+import { AppError, ERROR_CODES, validateInterviewStartRequest } from '../../../../lib/contracts.js';
+import { generateInterviewQuestions, getCompletedInterviewReport, interviewQuestionAt, withInterviewGeneration } from '../../../../lib/interview.js';
 import { logRouteEvent } from '../../../../lib/logger.js';
 import { deriveIpHash, getStore } from '../../../../lib/store.js';
 import { readBoundedJson } from '../../../../lib/request-body.js';
 import { budgetedGeminiProvider, getAiBudgetLimits, requireAiBudget } from '../../../../lib/ai-budget.js';
+import { redactLegacyPii } from '../../../../lib/redact.js';
 
 export const runtime = 'nodejs';
 
@@ -28,8 +29,8 @@ export async function handleInterviewStart(request, deps = {}) {
         const questions = await generateInterviewQuestions({
           mode,
           language,
-          sanitizedCvText: session.sanitizedCvText,
-          sanitizedJd: session.sanitizedJd,
+          sanitizedCvText: session.nameMaskVersion === 1 ? session.sanitizedCvText : redactLegacyPii(session.sanitizedCvText),
+          sanitizedJd: session.nameMaskVersion === 1 ? session.sanitizedJd : redactLegacyPii(session.sanitizedJd),
         }, deps.provider ?? budgetedGeminiProvider(store, limits, claim, deps.geminiOptions));
         return { interview: { mode, language, currentQuestion: 1, questions } };
       });
@@ -37,7 +38,7 @@ export async function handleInterviewStart(request, deps = {}) {
       if (!interview) throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
     }
 
-    const { currentQuestion, questions, completed, language: interviewLanguage } = interview;
+    const { currentQuestion, completed, language: interviewLanguage } = interview;
     if (completed) {
       throw new AppError(ERROR_CODES.QUESTION_CONFLICT, {
         completed,
@@ -45,13 +46,9 @@ export async function handleInterviewStart(request, deps = {}) {
         report: getCompletedInterviewReport(interview),
       });
     }
-    const question = questions[currentQuestion - 1];
-    if (!isInterviewQuestion(question, currentQuestion)) {
-      throw new AppError(ERROR_CODES.TEMPORARILY_UNAVAILABLE);
-    }
-    const { questionNumber, questionText, focusArea } = question;
+    const question = interviewQuestionAt(interview, currentQuestion);
     log({ route: ROUTE, status: 200, code: 'OK', elapsedMs: Date.now() - startedAt });
-    return Response.json({ questionNumber, questionText, focusArea }, {
+    return Response.json(question, {
       headers: { ...HEADERS, 'content-language': interviewLanguage, 'x-interview-mode': interview.mode },
     });
   } catch (err) {
